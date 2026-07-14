@@ -3,6 +3,7 @@ config.local.json
 data/
 projects/
 release/
+resources/bin/
 
 *.log
 .env
@@ -12,10 +13,6 @@ release/
 *.pfx
 *.p12
 
-# 内置编译器不放入源码仓库
-resources/bin/
-
-# 只公开 README 使用的示意图和程序图标
 *.png
 !docs/images/*.png
 !resources/icon.png
