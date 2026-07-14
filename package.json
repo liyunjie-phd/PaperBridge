@@ -1,0 +1,86 @@
+{
+  "name": "paper-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Local bilingual LaTeX editor with AI translation and Overleaf synchronization",
+  "author": "PaperBridge",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "desktop": "electron .",
+    "test": "node --test",
+    "build:dir": "electron-builder --dir --win --x64",
+    "build:setup": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "dugite": "^3.2.2",
+    "express": "^5.2.1",
+    "extract-zip": "^2.0.1",
+    "lucide": "^1.24.0",
+    "pdfjs-dist": "^6.1.200",
+    "word-extractor": "^1.0.4"
+  },
+  "devDependencies": {
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.61.1",
+    "png-to-ico": "^3.0.2"
+  },
+  "build": {
+    "appId": "com.paperbridge.desktop",
+    "productName": "PaperBridge",
+    "artifactName": "PaperBridge-Setup.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/dugite/git/**/*"
+    ],
+    "files": [
+      "electron-main.js",
+      "preload.cjs",
+      "server.js",
+      "lib/**/*",
+      "public/**/*",
+      "resources/icon.png",
+      "package.json",
+      "!config.local.json",
+      "!data/**/*",
+      "!test/**/*",
+      "!*.log",
+      "!*.png"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin",
+        "to": "bin",
+        "filter": [
+          "tectonic.exe"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "icon": "resources/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "include": "build/installer.nsh",
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

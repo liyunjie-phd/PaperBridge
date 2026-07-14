@@ -1,0 +1,4 @@
+PaperBridge 0.2.0 Windows Complete Package
+SHA-256 checksums
+
+124D6779F6CD12CCD09B61824131AEC81BDC4C23CF69194D0C531B67318FC43E *PaperBridge-Setup.exe

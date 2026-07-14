@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaperBridge</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="brand-mark"><img src="/brand-icon.png" alt=""></div>
+      <div>
+        <div class="brand-name">PaperBridge</div>
+        <div class="project-name" id="projectName">Loading project...</div>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <div class="sync-state" id="syncState">
+        <span class="status-dot"></span>
+        <span>检查同步状态</span>
+      </div>
+      <button class="button secondary" id="pullButton" title="从远端 Git 仓库拉取最新版本">
+        <i data-lucide="download"></i><span>拉取</span>
+      </button>
+      <button class="button secondary" id="compileButton" title="编译英文 LaTeX">
+        <i data-lucide="hammer"></i><span>编译</span>
+      </button>
+      <button class="button primary" id="pushButton" title="编译、提交并推送至远端 Git 仓库">
+        <i data-lucide="upload"></i><span>推送</span>
+      </button>
+      <button class="icon-button" id="settingsButton" title="设置">
+        <i data-lucide="settings"></i>
+      </button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar">
+      <div class="mode-switch" role="tablist">
+        <button class="mode-button active" data-mode="edit" role="tab">编辑</button>
+        <button class="mode-button" data-mode="review" role="tab">审校</button>
+        <button class="mode-button" data-mode="format" role="tab">格式</button>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-heading">
+          <span>文档</span>
+          <div class="sidebar-heading-actions">
+            <span class="count" id="documentCount">0</span>
+            <button class="icon-button small" id="addProjectButton" type="button" title="添加或切换论文"><i data-lucide="folder-plus"></i></button>
+          </div>
+        </div>
+        <nav class="document-list" id="documentList"></nav>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="metric-row">
+          <span>已翻译</span>
+          <strong id="translationProgress">0%</strong>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="translationProgressBar"></div></div>
+      </div>
+    </aside>
+
+    <section class="editor-panel" id="editView">
+      <div class="panel-toolbar">
+        <div>
+          <h1 id="currentFile">Select a document</h1>
+          <div class="file-meta" id="fileMeta">0 paragraphs</div>
+        </div>
+        <div class="toolbar-actions">
+          <div class="font-size-control" aria-label="编辑字号">
+            <button class="icon-button small" id="decreaseFontButton" title="减小字号"><i data-lucide="minus"></i></button>
+            <span id="editorFontSize">16</span>
+            <button class="icon-button small" id="increaseFontButton" title="增大字号"><i data-lucide="plus"></i></button>
+          </div>
+          <button class="button secondary" id="translateFileButton" title="为当前文件生成或更新中文版本">
+            <i data-lucide="languages"></i><span>生成本节中文</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="column-headings" id="bilingualHeadings">
+        <div class="column-heading"><span class="language-tag zh">中</span><strong>中文工作稿</strong></div>
+        <button class="split-handle" id="splitHandle" title="拖动调整中英文宽度" aria-label="拖动调整中英文宽度">
+          <i data-lucide="grip-vertical"></i>
+        </button>
+        <div class="column-heading"><span class="language-tag en">EN</span><strong>英文 LaTeX</strong></div>
+      </div>
+
+      <div class="segment-list" id="segmentList">
+        <div class="empty-state">正在读取论文结构...</div>
+      </div>
+    </section>
+
+    <section class="editor-panel review-panel hidden" id="reviewView">
+      <div class="panel-toolbar">
+        <div>
+          <h1>全文英文审校</h1>
+          <div class="file-meta" id="reviewMeta">尚未运行</div>
+        </div>
+        <button class="button primary" id="runReviewButton">
+          <i data-lucide="search-check"></i><span>开始审校</span>
+        </button>
+      </div>
+      <div class="review-summary" id="reviewSummary"></div>
+      <div class="review-list" id="reviewList">
+        <div class="empty-state">暂无审校结果</div>
+      </div>
+    </section>
+
+    <section class="editor-panel format-panel hidden" id="formatView">
+      <div class="panel-toolbar">
+        <div>
+          <h1>投稿格式迁移</h1>
+          <div class="file-meta" id="formatMeta">尚未分析目标格式</div>
+        </div>
+        <button class="button secondary" id="addFormatFilesButton" type="button">
+          <i data-lucide="paperclip"></i><span>添加格式文件</span>
+        </button>
+      </div>
+      <div class="format-scroll">
+        <section class="format-section">
+          <label class="field">
+            <span>目标格式要求</span>
+            <textarea class="format-requirements" id="formatRequirements" placeholder="例如：改为双栏、正文 10pt、匿名审稿、参考文献使用 IEEE 编号格式……"></textarea>
+          </label>
+          <div class="format-file-list" id="formatFileList">
+            <div class="format-empty">未添加格式文件</div>
+          </div>
+          <div class="format-actions">
+            <button class="button primary" id="analyzeFormatButton" type="button">
+              <i data-lucide="scan-search"></i><span>分析格式差异</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="format-section hidden" id="formatAnalysisSection">
+          <div class="format-analysis-header">
+            <div>
+              <h2 id="formatTargetName">目标投稿格式</h2>
+              <div class="file-meta" id="formatAnalysisSummary"></div>
+            </div>
+            <span class="format-status" id="formatStatus">已分析</span>
+          </div>
+          <div class="format-difference-list" id="formatDifferenceList"></div>
+          <div class="format-warning-list" id="formatWarningList"></div>
+          <div class="format-actions">
+            <button class="button primary" id="applyFormatButton" type="button">
+              <i data-lucide="wand-sparkles"></i><span>应用到全文并编译</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="preview-panel">
+      <div class="preview-toolbar">
+        <div>
+          <div class="preview-title">英文排版</div>
+          <div class="page-status" id="pageStatus">PDF 未加载</div>
+        </div>
+        <div class="preview-actions">
+          <div class="page-navigation" aria-label="PDF page navigation">
+            <button class="icon-button small" id="previousPageButton" title="上一页"><i data-lucide="chevron-left"></i></button>
+            <span id="visiblePage">1</span>
+            <button class="icon-button small" id="nextPageButton" title="下一页"><i data-lucide="chevron-right"></i></button>
+          </div>
+          <div class="pdf-zoom-control" aria-label="PDF 缩放">
+            <button class="icon-button small" id="zoomOutButton" title="缩小 PDF"><i data-lucide="zoom-out"></i></button>
+            <button class="pdf-zoom-value" id="pdfZoomValue" type="button" title="恢复适合宽度">100%</button>
+            <button class="icon-button small" id="zoomInButton" title="放大 PDF"><i data-lucide="zoom-in"></i></button>
+          </div>
+          <button class="icon-button" id="warningsButton" title="编译告警">
+            <i data-lucide="triangle-alert"></i>
+            <span class="notification-badge hidden" id="warningCount">0</span>
+          </button>
+          <button class="icon-button" id="refreshPdfButton" title="刷新 PDF">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+          <button class="icon-button" id="exportPdfButton" title="导出 PDF">
+            <i data-lucide="file-down"></i>
+          </button>
+          <a class="icon-button" id="openPdfButton" href="/api/pdf" target="_blank" title="在新窗口打开 PDF">
+            <i data-lucide="external-link"></i>
+          </a>
+        </div>
+      </div>
+      <div class="page-meter"><div class="page-meter-fill" id="pageMeterFill"></div></div>
+      <div class="pdf-scroll" id="pdfScroll" aria-label="Compiled English paper preview"></div>
+      <div class="build-drawer hidden" id="buildDrawer">
+        <div class="drawer-header">
+          <strong>编译告警</strong>
+          <button class="icon-button small" id="closeWarningsButton" title="关闭"><i data-lucide="x"></i></button>
+        </div>
+        <div class="warning-list" id="warningList"></div>
+      </div>
+    </aside>
+  </main>
+
+  <dialog class="setup-dialog" id="setupDialog">
+    <form class="setup-form" id="setupForm">
+      <div class="setup-header">
+        <div class="brand-mark large"><img src="/brand-icon.png" alt=""></div>
+        <div class="setup-header-copy">
+          <h2 id="setupTitle">开始使用 PaperBridge</h2>
+          <div class="file-meta" id="setupSubtitle">连接论文并配置你的 AI 接口</div>
+        </div>
+        <button class="icon-button hidden" id="closeSetupButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+
+      <section class="setup-section">
+        <div class="setup-section-heading"><span class="setup-step">1</span><strong>选择论文</strong></div>
+        <div class="source-switch" role="radiogroup" aria-label="论文来源">
+          <label><input type="radio" name="setupSource" value="overleaf" checked><span><i data-lucide="cloud"></i>Overleaf</span></label>
+          <label><input type="radio" name="setupSource" value="git"><span><i data-lucide="git-branch"></i>Git 仓库</span></label>
+          <label><input type="radio" name="setupSource" value="zip"><span><i data-lucide="file-archive"></i>ZIP 文件</span></label>
+          <label><input type="radio" name="setupSource" value="local"><span><i data-lucide="folder-open"></i>本地文件夹</span></label>
+        </div>
+
+        <div class="source-panel hidden" data-source-panel="git">
+          <label class="field wide">
+            <span>GitHub / GitLab HTTPS 仓库地址</span>
+            <input id="setupGitUrl" type="url" autocomplete="off" placeholder="https://github.com/username/repository.git">
+          </label>
+          <div class="setup-inline-grid">
+            <label class="field">
+              <span>Git 用户名</span>
+              <input id="setupGitUsername" type="text" autocomplete="username" placeholder="私有仓库建议填写">
+            </label>
+            <label class="field">
+              <span>Personal Access Token</span>
+              <input id="setupGitToken" type="password" autocomplete="new-password" placeholder="公开仓库可以留空">
+            </label>
+          </div>
+          <div class="setup-note">仅支持 HTTPS 地址。Token 只保存在此电脑，不会写入论文目录或 Git 远端地址。</div>
+        </div>
+
+        <div class="source-panel" data-source-panel="overleaf">
+          <label class="field wide">
+            <span>Overleaf 项目链接</span>
+            <input id="setupProjectUrl" type="url" autocomplete="off" placeholder="https://www.overleaf.com/project/...">
+          </label>
+          <div class="setup-inline-grid">
+            <label class="field">
+              <span>Overleaf Git Token</span>
+              <input id="setupOverleafToken" type="password" autocomplete="new-password">
+            </label>
+            <button class="button secondary setup-help-button" id="openOverleafTokenButton" type="button">
+              <i data-lucide="external-link"></i><span>获取 Token</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="source-panel hidden" data-source-panel="zip">
+          <label class="field wide">
+            <span>Overleaf ZIP 文件</span>
+            <div class="path-input-row">
+              <input id="setupZipPath" type="text" autocomplete="off" readonly>
+              <button class="icon-button" id="chooseZipButton" type="button" title="选择 ZIP"><i data-lucide="folder-open"></i></button>
+            </div>
+          </label>
+        </div>
+
+        <div class="source-panel hidden" data-source-panel="local">
+          <label class="field wide">
+            <span>本地论文文件夹</span>
+            <div class="path-input-row">
+              <input id="setupLocalPath" type="text" autocomplete="off" readonly>
+              <button class="icon-button" id="chooseLocalButton" type="button" title="选择文件夹"><i data-lucide="folder-open"></i></button>
+            </div>
+          </label>
+        </div>
+
+        <div class="setup-git-option hidden" id="setupOptionalGit">
+          <label class="toggle-row setup-toggle">
+            <input id="setupConnectGit" type="checkbox">
+            <span>同时连接 GitHub / GitLab 仓库</span>
+          </label>
+          <div class="setup-git-fields hidden" id="setupOptionalGitFields">
+            <label class="field wide">
+              <span>GitHub / GitLab HTTPS 仓库地址</span>
+              <input id="setupLinkedGitUrl" type="url" autocomplete="off" placeholder="建议使用新建的空仓库">
+            </label>
+            <div class="setup-inline-grid">
+              <label class="field">
+                <span>Git 用户名</span>
+                <input id="setupLinkedGitUsername" type="text" autocomplete="username">
+              </label>
+              <label class="field">
+                <span>Personal Access Token</span>
+                <input id="setupLinkedGitToken" type="password" autocomplete="new-password" placeholder="公开仓库可以留空">
+              </label>
+            </div>
+            <div class="setup-note">导入时只连接并检查仓库，不会立即上传。确认论文无误后，再点击页面顶部的“推送”。</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="setup-section" id="setupAiSection">
+        <div class="setup-section-heading"><span class="setup-step">2</span><strong>配置 AI</strong></div>
+        <div class="setup-provider-grid">
+          <label class="field">
+            <span>API 服务类型</span>
+            <select id="setupProviderType">
+              <option value="openai-compatible">DeepSeek / OpenAI 兼容接口</option>
+              <option value="anthropic">Anthropic 官方接口</option>
+              <option value="gemini">Google Gemini 官方接口</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>模型</span>
+            <select id="setupModel">
+              <option value="deepseek-v4-flash">DeepSeek V4 Flash（推荐）</option>
+              <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+              <option value="__custom__">其他 / 自定义模型</option>
+            </select>
+          </label>
+          <label class="field wide hidden" id="setupCustomModelField">
+            <span>自定义模型名称</span>
+            <input id="setupCustomModel" type="text" autocomplete="off" placeholder="填写 API 服务提供的模型名称">
+          </label>
+          <label class="field wide">
+            <span>Base URL</span>
+            <input id="setupBaseUrl" type="url" autocomplete="off" placeholder="例如 https://api.deepseek.com">
+          </label>
+          <label class="field">
+            <span>API Key</span>
+            <input id="setupApiKey" type="password" autocomplete="new-password">
+          </label>
+        </div>
+      </section>
+
+      <section class="setup-section compact">
+        <div class="setup-section-heading"><span class="setup-step">3</span><strong>排版设置</strong></div>
+        <div class="setup-options-row">
+          <label class="field page-limit-field"><span>页数上限</span><input id="setupPageLimit" type="number" min="1" value="14"></label>
+          <label class="toggle-row setup-toggle"><input id="setupAutoCompile" type="checkbox" checked><span>英文更新后自动编译</span></label>
+          <div class="dependency-status" id="dependencyStatus"></div>
+        </div>
+      </section>
+
+      <div class="setup-message" id="setupMessage" aria-live="polite"></div>
+      <div class="setup-actions">
+        <button class="button secondary" id="setupTestButton" type="button"><i data-lucide="plug-zap"></i><span>测试 AI</span></button>
+        <button class="button primary" id="setupSubmitButton" type="submit"><i data-lucide="arrow-right"></i><span id="setupSubmitLabel">进入 PaperBridge</span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="paragraph-dialog" id="paragraphDialog">
+    <form class="paragraph-form" id="paragraphForm">
+      <div class="dialog-header">
+        <div>
+          <h2>新增正文段落</h2>
+          <div class="file-meta" id="paragraphAnchorLabel">选择插入位置</div>
+        </div>
+        <button class="icon-button" id="closeParagraphButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="paragraph-dialog-body">
+        <div class="paragraph-position" role="radiogroup" aria-label="新段落插入位置">
+          <label><input type="radio" name="newParagraphPosition" value="after" checked><span>当前段落之后</span></label>
+          <label><input type="radio" name="newParagraphPosition" value="before"><span>当前段落之前</span></label>
+        </div>
+        <label class="field">
+          <span>中文工作稿</span>
+          <textarea class="paragraph-textarea" id="newParagraphChinese" lang="zh-CN" placeholder="输入需要新增的完整中文段落"></textarea>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelParagraphButton" type="button">取消</button>
+        <button class="button primary" id="addParagraphSubmitButton" type="submit"><i data-lucide="languages"></i><span>生成英文并添加</span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="git-push-dialog" id="gitPushDialog">
+    <form class="git-push-form" id="gitPushForm">
+      <div class="dialog-header">
+        <div>
+          <h2>确认首次上传文件</h2>
+          <div class="file-meta">默认选择论文源文件、参考文献、样式和图像</div>
+        </div>
+        <button class="icon-button" id="closeGitPushButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="git-push-body">
+        <div class="git-push-toolbar">
+          <label><input id="selectRecommendedGitFiles" type="checkbox" checked><span>选择推荐文件</span></label>
+          <span id="gitPushFileCount"></span>
+        </div>
+        <div class="git-push-list" id="gitPushList"></div>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelGitPushButton" type="button">取消</button>
+        <button class="button primary" type="submit"><i data-lucide="upload"></i><span>确认并推送</span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="settings-dialog" id="settingsDialog">
+    <form method="dialog" class="settings-form" id="settingsForm">
+      <div class="dialog-header">
+        <div>
+          <h2>本地设置</h2>
+          <div class="file-meta">配置仅保存在此电脑</div>
+        </div>
+        <button class="icon-button" value="cancel" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+
+      <div class="settings-grid">
+        <label class="field wide">
+          <span>论文目录</span>
+          <div class="path-input-row">
+            <input id="projectRootInput" type="text" autocomplete="off">
+            <button class="icon-button" id="chooseSettingsFolderButton" type="button" title="选择论文文件夹"><i data-lucide="folder-open"></i></button>
+          </div>
+        </label>
+        <label class="field wide">
+          <span>Overleaf Git Token</span>
+          <div class="path-input-row">
+            <input id="overleafTokenInput" type="password" autocomplete="new-password">
+            <button class="icon-button" id="openSettingsOverleafTokenButton" type="button" title="打开 Overleaf Token 设置"><i data-lucide="external-link"></i></button>
+          </div>
+        </label>
+        <label class="field">
+          <span>GitHub / GitLab 用户名</span>
+          <input id="gitUsernameInput" type="text" autocomplete="username">
+        </label>
+        <label class="field">
+          <span>GitHub / GitLab Token</span>
+          <input id="gitTokenInput" type="password" autocomplete="new-password">
+        </label>
+        <label class="field">
+          <span>主 TeX 文件</span>
+          <input id="mainTexInput" type="text" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>页数上限</span>
+          <input id="pageLimitInput" type="number" min="1" step="1">
+        </label>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title"><i data-lucide="languages"></i><span>段落翻译</span></div>
+        <div class="provider-grid" data-provider="translation"></div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title"><i data-lucide="search-check"></i><span>全文审校</span></div>
+        <div class="provider-grid" data-provider="review"></div>
+      </div>
+
+      <label class="toggle-row">
+        <input id="autoCompileInput" type="checkbox">
+        <span>英文更新后自动编译</span>
+      </label>
+
+      <div class="dialog-actions">
+        <button type="button" class="button secondary" id="testTranslationButton">
+          <i data-lucide="plug-zap"></i><span>测试翻译接口</span>
+        </button>
+        <button type="button" class="button secondary" id="testReviewButton">
+          <i data-lucide="plug-zap"></i><span>测试审校接口</span>
+        </button>
+        <button type="submit" class="button primary" value="default">
+          <i data-lucide="save"></i><span>保存设置</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <script src="/vendor/lucide/lucide.min.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
