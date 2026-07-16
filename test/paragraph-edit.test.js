@@ -67,8 +67,7 @@ test("paragraph API inserts, remaps Chinese drafts, and deletes", async () => {
       source: { mode: "local", localPath: projectRoot },
       translation: provider,
       review: provider,
-      autoCompile: false,
-      pageLimit: 12
+      autoCompile: false
     });
     let document = await request("/api/document?file=main.tex");
     await Promise.all([

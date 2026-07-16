@@ -1,4 +1,4 @@
-PaperBridge 0.2.0 Windows 完整版使用说明
+PaperBridge 0.3.0 Windows 完整版使用说明
 ====================================
 
 一、版本说明
@@ -6,12 +6,12 @@ PaperBridge 0.2.0 Windows 完整版使用说明
 收到 ZIP 后请先完整解压到一个普通文件夹，再运行其中的程序。
 不要直接在压缩软件的预览窗口中启动 EXE。
 
-双击 PaperBridge-Setup.exe 完成安装。该版本包含内置 Tectonic 排版组件，
+双击 PaperBridge-Setup.exe，选择程序安装目录后完成安装。该版本包含内置 Tectonic 排版组件，
 电脑没有安装 TeX Live 或 MiKTeX 也可以编译论文。
 
 如果电脑已经安装 TeX Live 或 MiKTeX，并且可以使用 latexmk，PaperBridge 会优先使用本机 LaTeX；
-否则自动使用内置 Tectonic。安装后会创建桌面和开始菜单快捷方式，
-设置保存在 Windows 用户应用数据目录中，论文保存在“文档\PaperBridge Projects”。
+否则自动使用内置 Tectonic。安装后会创建桌面和开始菜单快捷方式。
+程序安装目录与论文数据目录彼此独立，首次启动时可以为数据目录选择其他磁盘。
 
 二、Windows 安全提示
 
@@ -29,13 +29,18 @@ Windows 第一次运行时可能显示“Windows 已保护你的电脑”。
 
 三、首次配置
 
-1. 启动 PaperBridge。
+1. 启动 PaperBridge，选择 PaperBridge 数据目录。配置、中文工作稿、备份和导入的论文项目会统一保存在其中。
 2. 选择论文来源：Overleaf 链接、GitHub/GitLab HTTPS 仓库、Overleaf ZIP，或本地 LaTeX 文件夹。
 3. 如果使用 Overleaf 链接，请填写自己的 Overleaf Git Token。PaperBridge 会在拉取和推送时自动完成认证，不需要输入 Git 密码。
 4. 在 AI 设置中选择 API 服务类型和模型，再填写自己的 API 地址与 API Key。DeepSeek 可以直接从下拉框选择 V4 Flash 或 V4 Pro。
-5. 不要把自己的 API Key、Overleaf Token 或 PaperBridge-Data 文件夹发给别人。
+5. 数据目录之后可以在“设置”中迁移到其他磁盘；外部打开的本地论文文件夹不会被移动。
+6. 不要把自己的 API Key、Overleaf Token 或 PaperBridge 数据目录发给别人。
 
 如果 Overleaf 显示“no git access”，常见原因是项目链接错误、项目不存在、账户没有项目权限，或项目所有者没有开通 Overleaf Git 高级功能。该功能通常需要个人/团队订阅或学校的 Overleaf Commons 权限。没有权限时，请从 Overleaf 下载 ZIP 后导入。
+
+如果 ZIP 中包含多个带 documentclass 的完整 TeX 文件，PaperBridge 会要求选择主 TeX 文件。请选择与 Overleaf 菜单中 Main document 相同的文件，不要仅凭文件名 main.tex 判断。
+
+如果提示“Command \algorithm already defined”，应先核对主 TeX 文件；确认主文件无误后，再检查是否同时加载了 algorithm 与 algorithm2e 等重复定义算法环境的宏包。PaperBridge 不会自动删除论文宏包。
 
 GitHub/GitLab 可以直接选择“Git 仓库”进行克隆。选择 ZIP 或本地文件夹时，也可以勾选“同时连接 GitHub / GitLab 仓库”。建议使用新建的空仓库；导入不会自动上传，确认无误后再点击顶部“推送”。私有仓库需要 Git 用户名和 Personal Access Token，目前只支持 HTTPS 地址。
 
@@ -45,11 +50,18 @@ GitHub/GitLab 可以直接选择“Git 仓库”进行克隆。选择 ZIP 或本
 四、主要功能
 
 - 左侧修改中文，右侧更新对应英文 LaTeX。
+- 每个段落的语言按钮只把当前英文段落翻译成中文，不会发送同一节或整个 main.tex；已经有中文的段落不会重复调用接口。中文结果不会因为缺少 LaTeX 标记而被拦截。
+- 可以从工具栏选择当前 TeX 文件中的顶层 LaTeX 节，逐节生成中文；每次只发送所选节的正文段落，并显示当前批次、已处理段落数和完成百分比。
+- “TeX”视图可以直接选择、修改和保存主文件、input/include 引用的 TeX 文件，以及 bibliography/addbibresource 引用的 Bib 文件，支持行号、未保存提示和 Ctrl+S。
+- “按章节拆分”会先预览 main.tex、各章节 TeX 和独立 Bib 的三层结构；检测到 thebibliography 或内嵌 filecontents 时，可以先一键迁移到独立 Bib。确认后才写入，已有中文工作稿会跟随段落迁移，编译失败则自动恢复。
 - 每个段落右上角的加号可以在当前段落之前或之后新增正文；输入中文后会自动生成对应英文。垃圾桶按钮用于删除不再需要的段落。
-- AI 输出包含危险 LaTeX 命令时会被直接阻止；新增其他 LaTeX 命令时会显示命令清单并要求确认。
-- 以英文 LaTeX 为排版依据并实时编译 PDF。
-- PDF 支持缩放、拖动和下载。
-- 可以上传 Word、PDF、TeX 或 ZIP 格式模板，分析并迁移论文格式。
+- 中文更新英文、英文审校和格式迁移等会写回 TeX 的操作中，AI 输出包含危险 LaTeX 命令时会被直接阻止；新增其他 LaTeX 命令时会显示命令清单并要求确认。
+- 以英文 LaTeX 为排版依据并实时编译 PDF，只显示实际页数，不设置页数上限。
+- 出现致命编译错误时会自动调用审校 API，给出具体 TeX 文件、行号、原因和修改建议；点击文件位置会跳到 TeX 编辑器对应行，但不会自动修改源码。
+- PDF 支持 50%–300% 缩放；可以使用 Ctrl+鼠标滚轮围绕指针位置连续缩放，停止后自动高清重绘，也支持拖动页面和下载。双击 PDF 文字会优先定位左侧对应的中英文段落；找不到翻译段落时会自动切换到 TeX 视图并定位对应源码行。
+- 编辑区与 PDF 区之间的分隔线可以左右拖动，宽度比例会自动保存；双击分隔线可恢复默认比例。
+- 可以上传 Word、PDF、TeX 或 ZIP 格式模板，分析并迁移论文格式。分析前会提示论文结构，可以一键迁移内嵌参考文献、拆分章节并继续，也可以在了解长上下文风险后保持单文件继续。
+- 格式迁移按照“main.tex 整体格式 -> 各章节局部格式 -> Bib 独立保留”的顺序执行经过本地校验的精确操作；Bib 条目不会交给格式模型重写。模型输出无效时会带着校验原因重试，编译失败时最多进行两次基于日志的最小修复，最终仍失败则自动恢复全部文件。
 - 可以在完成修改后进行英文语法和全文连贯性检查。
 - 导入 ZIP 或本地文件夹时，会自动跳过导言区、作者信息、宏定义、公式、图表、算法代码和参考文献。
 - 可以从 GitHub/GitLab 仓库拉取和推送；对于没有共同历史的非空远端，PaperBridge 会拒绝覆盖。
@@ -57,6 +69,9 @@ GitHub/GitLab 可以直接选择“Git 仓库”进行克隆。选择 ZIP 或本
 
 中文工作稿会按项目依次保存，并在 PaperBridge 数据目录中保留一份最近备份。
 备份不会写入论文文件夹或 Git 仓库。PaperBridge 也会拒绝编辑指向项目目录之外的符号链接。
+TeX / Bib 源码也会按项目串行、原子保存，每个源码文件最多保留最近三份备份；章节拆分和参考文献迁移分别保留最近三次主文件备份。如果文件已在其他程序中变化，PaperBridge 会拒绝覆盖并要求重新载入。
+编译错误诊断只会发送错误日志、报错行附近源码和必要的 LaTeX 配置行；相同错误会使用缓存，避免重复消耗 API Token。
+如果论文把参考文献直接写在 thebibliography 或 filecontents 环境中，可以使用“一键迁移到 Bib”。PaperBridge 会保留引用键、原始文献文本和未引用但原本显示的条目，不会猜测作者、题名、年份或 DOI 字段；迁移后会重新编译，失败时自动恢复。
 
 左侧“文档”标题旁的文件夹加号可以添加或切换论文。顶部“拉取”和“推送”用于更新当前 Overleaf 项目。
 
@@ -82,7 +97,7 @@ GitHub/GitLab 可以直接选择“Git 仓库”进行克隆。选择 ZIP 或本
 卸载程序会询问是否同时删除本地数据：
 
 - 选择“否”：保留论文项目、API 配置和本地设置，以后重新安装仍可继续使用。
-- 选择“是”：永久删除“文档\PaperBridge Projects”中的全部项目，以及 PaperBridge 的设置和缓存。
+- 选择“是”：永久删除用户选择的数据目录，其中包括已导入项目、中文工作稿、备份、设置和缓存。
 
 删除无法撤销。选择“是”之前，请先备份仍需保留的论文和附件。
 

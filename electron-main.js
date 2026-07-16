@@ -1,10 +1,38 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import { startServer, stopServer } from "./server.js";
 
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
+const bootstrapUserData = app.getPath("userData");
+const storageLocatorPath = path.join(bootstrapUserData, "storage-location.txt");
+
+function readStoredStorageRoot() {
+  try {
+    const stored = fsSync.readFileSync(storageLocatorPath, "utf8").trim();
+    if (!stored || !path.isAbsolute(stored)) return "";
+    if (!fsSync.existsSync(path.join(stored, ".paperbridge-storage"))) return "";
+    return path.resolve(stored);
+  } catch {
+    return "";
+  }
+}
+
+async function persistStorageRoot(storageRoot) {
+  await fs.mkdir(bootstrapUserData, { recursive: true });
+  const temporary = `${storageLocatorPath}.${process.pid}.tmp`;
+  try {
+    await fs.writeFile(temporary, path.resolve(storageRoot), "utf8");
+    await fs.rename(temporary, storageLocatorPath);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+const storedStorageRoot = process.env.PAPERBRIDGE_STORAGE_ROOT || readStoredStorageRoot();
+if (storedStorageRoot) app.setPath("userData", path.join(storedStorageRoot, "AppData"));
 let mainWindow = null;
 let appUrl = "";
 
@@ -59,6 +87,16 @@ async function createWindow() {
 function registerDesktopHandlers() {
   ipcMain.handle("paperbridge:choose-folder", async () => {
     const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
+    return result.canceled ? "" : result.filePaths[0];
+  });
+  ipcMain.handle("paperbridge:choose-data-folder", async (_event, currentPath) => {
+    const requested = String(currentPath || "").trim();
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "选择 PaperBridge 数据保存位置",
+      defaultPath: requested && path.isAbsolute(requested) ? requested : app.getPath("documents"),
+      buttonLabel: "选择此文件夹",
+      properties: ["openDirectory", "createDirectory"]
+    });
     return result.canceled ? "" : result.filePaths[0];
   });
   ipcMain.handle("paperbridge:choose-zip", async () => {
@@ -118,8 +156,15 @@ app.whenReady().then(async () => {
     : path.join(appRoot, "resources", "bin", "tectonic.exe");
   const server = await startServer({
     port: 0,
-    dataRoot: process.env.PAPERBRIDGE_DATA_ROOT || (portableRoot ? path.join(portableRoot, "Settings") : app.getPath("userData")),
-    projectsRoot: process.env.PAPERBRIDGE_PROJECTS_ROOT || (portableRoot ? path.join(portableRoot, "Projects") : path.join(app.getPath("documents"), "PaperBridge Projects")),
+    storageRoot: portableRoot || storedStorageRoot,
+    defaultStorageRoot: path.join(app.getPath("documents"), "PaperBridge Data"),
+    dataRoot: process.env.PAPERBRIDGE_DATA_ROOT
+      || (portableRoot ? path.join(portableRoot, "Settings") : storedStorageRoot ? path.join(storedStorageRoot, "Settings") : app.getPath("userData")),
+    projectsRoot: process.env.PAPERBRIDGE_PROJECTS_ROOT
+      || (portableRoot ? path.join(portableRoot, "Projects") : storedStorageRoot ? path.join(storedStorageRoot, "Projects") : path.join(app.getPath("documents"), "PaperBridge Projects")),
+    persistStorageRoot: portableRoot || process.env.PAPERBRIDGE_DATA_ROOT || process.env.PAPERBRIDGE_PROJECTS_ROOT
+      ? null
+      : persistStorageRoot,
     tectonicPath: process.env.PAPERBRIDGE_TECTONIC_PATH || tectonicPath,
     encryptSecret,
     decryptSecret

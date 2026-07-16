@@ -34,6 +34,27 @@ test("parseSegments keeps prose and skips figures", () => {
   assert.doesNotMatch(parsed.segments.map((item) => item.english).join("\n"), /caption must not/);
 });
 
+test("parseSegments assigns prose to top-level LaTeX sections", () => {
+  const source = [
+    "An abstract paragraph contains enough academic prose to remain editable before the first section.",
+    "",
+    "\\section{Introduction}",
+    "The introduction paragraph contains enough academic prose for section-scoped translation.",
+    "",
+    "\\subsection{Motivation}",
+    "The motivation paragraph remains part of the same top-level introduction section.",
+    "",
+    "\\section{Method}",
+    "The method paragraph contains enough academic prose for a separate translation request."
+  ].join("\n");
+
+  const parsed = parseSegments(source, "main.tex");
+  assert.deepEqual(parsed.segments.map((segment) => segment.sectionTitle), ["", "Introduction", "Introduction", "Method"]);
+  assert.deepEqual(parsed.segments.map((segment) => segment.sectionIndex), [0, 1, 1, 2]);
+  assert.equal(parsed.segments[1].sectionId, parsed.segments[2].sectionId);
+  assert.notEqual(parsed.segments[2].sectionId, parsed.segments[3].sectionId);
+});
+
 test("parseSegments excludes IEEE preamble, author metadata, math, and references", () => {
   const source = [
     "\\documentclass[conference]{IEEEtran}",

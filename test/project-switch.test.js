@@ -37,7 +37,6 @@ test("switching projects preserves saved AI and Overleaf credentials", async () 
     response = await request("/api/setup", {
       source: { mode: "local", localPath: firstProject },
       preserveProviders: true,
-      pageLimit: 12,
       autoCompile: true
     });
     assert.equal(response.ok, true);
@@ -45,7 +44,6 @@ test("switching projects preserves saved AI and Overleaf credentials", async () 
     response = await request("/api/setup", {
       source: { mode: "local", localPath: secondProject },
       preserveProviders: true,
-      pageLimit: 12,
       autoCompile: true
     });
     assert.equal(response.ok, true);

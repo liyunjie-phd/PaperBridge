@@ -40,6 +40,7 @@
     <aside class="sidebar">
       <div class="mode-switch" role="tablist">
         <button class="mode-button active" data-mode="edit" role="tab">编辑</button>
+        <button class="mode-button" data-mode="source" role="tab">TeX</button>
         <button class="mode-button" data-mode="review" role="tab">审校</button>
         <button class="mode-button" data-mode="format" role="tab">格式</button>
       </div>
@@ -76,9 +77,20 @@
             <span id="editorFontSize">16</span>
             <button class="icon-button small" id="increaseFontButton" title="增大字号"><i data-lucide="plus"></i></button>
           </div>
-          <button class="button secondary" id="translateFileButton" title="为当前文件生成或更新中文版本">
-            <i data-lucide="languages"></i><span>生成本节中文</span>
+          <select class="translation-section-select" id="translationSectionSelect" aria-label="选择要翻译的 LaTeX 节" title="选择要生成中文的节"></select>
+          <button class="button secondary" id="translateFileButton" title="为选中的节生成或更新中文版本">
+            <i data-lucide="languages"></i><span>翻译本节</span>
           </button>
+        </div>
+      </div>
+
+      <div class="file-translation-progress hidden" id="fileTranslationProgress" role="status" aria-live="polite">
+        <div class="file-translation-progress-meta">
+          <span id="fileTranslationProgressLabel">准备翻译</span>
+          <strong id="fileTranslationProgressCount">0 / 0</strong>
+        </div>
+        <div class="progress-track" id="fileTranslationProgressTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="progress-fill" id="fileTranslationProgressBar"></div>
         </div>
       </div>
 
@@ -92,6 +104,28 @@
 
       <div class="segment-list" id="segmentList">
         <div class="empty-state">正在读取论文结构...</div>
+      </div>
+    </section>
+
+    <section class="editor-panel source-panel hidden" id="sourceView">
+      <div class="panel-toolbar source-toolbar">
+        <div>
+          <h1>TeX / Bib 源码</h1>
+          <div class="file-meta source-status" id="sourceStatus">选择文件后可以直接修改</div>
+        </div>
+        <div class="toolbar-actions">
+          <select class="source-file-select" id="sourceFileSelect" aria-label="选择 TeX 或 Bib 源文件"></select>
+          <button class="button secondary" id="modularizeButton" type="button">
+            <i data-lucide="files"></i><span>按章节拆分</span>
+          </button>
+          <button class="button primary" id="saveSourceButton" type="button" disabled>
+            <i data-lucide="save"></i><span>保存</span>
+          </button>
+        </div>
+      </div>
+      <div class="source-editor-shell">
+        <pre class="source-line-numbers" id="sourceLineNumbers" aria-hidden="true">1</pre>
+        <textarea class="source-editor" id="sourceEditor" aria-label="TeX 或 Bib 源码编辑器" autocomplete="off" autocapitalize="off" spellcheck="false" wrap="off"></textarea>
       </div>
     </section>
 
@@ -145,6 +179,7 @@
             </div>
             <span class="format-status" id="formatStatus">已分析</span>
           </div>
+          <div class="format-workflow" id="formatWorkflow"></div>
           <div class="format-difference-list" id="formatDifferenceList"></div>
           <div class="format-warning-list" id="formatWarningList"></div>
           <div class="format-actions">
@@ -155,6 +190,21 @@
         </section>
       </div>
     </section>
+
+    <button
+      class="workspace-split-handle"
+      id="workspaceSplitHandle"
+      type="button"
+      role="separator"
+      aria-label="调整编辑区与 PDF 区宽度"
+      aria-orientation="vertical"
+      aria-valuemin="32"
+      aria-valuemax="72"
+      aria-valuenow="54"
+      title="拖动调整编辑区与 PDF 区宽度"
+    >
+      <i data-lucide="grip-vertical"></i>
+    </button>
 
     <aside class="preview-panel">
       <div class="preview-toolbar">
@@ -173,7 +223,7 @@
             <button class="pdf-zoom-value" id="pdfZoomValue" type="button" title="恢复适合宽度">100%</button>
             <button class="icon-button small" id="zoomInButton" title="放大 PDF"><i data-lucide="zoom-in"></i></button>
           </div>
-          <button class="icon-button" id="warningsButton" title="编译告警">
+          <button class="icon-button" id="warningsButton" title="编译信息">
             <i data-lucide="triangle-alert"></i>
             <span class="notification-badge hidden" id="warningCount">0</span>
           </button>
@@ -188,13 +238,20 @@
           </a>
         </div>
       </div>
-      <div class="page-meter"><div class="page-meter-fill" id="pageMeterFill"></div></div>
       <div class="pdf-scroll" id="pdfScroll" aria-label="Compiled English paper preview"></div>
       <div class="build-drawer hidden" id="buildDrawer">
         <div class="drawer-header">
-          <strong>编译告警</strong>
+          <strong>编译信息</strong>
           <button class="icon-button small" id="closeWarningsButton" title="关闭"><i data-lucide="x"></i></button>
         </div>
+        <section class="compile-diagnosis hidden" id="compileDiagnosis" aria-live="polite">
+          <div class="compile-diagnosis-header">
+            <span><i data-lucide="sparkles"></i><strong>AI 错误诊断</strong></span>
+            <span id="compileDiagnosisStatus"></span>
+          </div>
+          <div class="compile-diagnosis-summary" id="compileDiagnosisSummary"></div>
+          <div class="compile-diagnosis-list" id="compileDiagnosisList"></div>
+        </section>
         <div class="warning-list" id="warningList"></div>
       </div>
     </aside>
@@ -211,8 +268,20 @@
         <button class="icon-button hidden" id="closeSetupButton" type="button" title="关闭"><i data-lucide="x"></i></button>
       </div>
 
+      <section class="setup-section" id="setupStorageSection">
+        <div class="setup-section-heading"><span class="setup-step">1</span><strong>选择数据保存位置</strong></div>
+        <label class="field wide">
+          <span>PaperBridge 数据目录</span>
+          <div class="path-input-row">
+            <input id="setupStorageRoot" type="text" autocomplete="off" readonly required>
+            <button class="icon-button" id="chooseSetupStorageButton" type="button" title="选择数据目录"><i data-lucide="folder-open"></i></button>
+          </div>
+        </label>
+        <div class="setup-note">配置、中文工作稿、备份和导入的论文项目将统一保存在这里。</div>
+      </section>
+
       <section class="setup-section">
-        <div class="setup-section-heading"><span class="setup-step">1</span><strong>选择论文</strong></div>
+        <div class="setup-section-heading"><span class="setup-step" id="setupSourceStep">2</span><strong>选择论文</strong></div>
         <div class="source-switch" role="radiogroup" aria-label="论文来源">
           <label><input type="radio" name="setupSource" value="overleaf" checked><span><i data-lucide="cloud"></i>Overleaf</span></label>
           <label><input type="radio" name="setupSource" value="git"><span><i data-lucide="git-branch"></i>Git 仓库</span></label>
@@ -300,7 +369,7 @@
       </section>
 
       <section class="setup-section" id="setupAiSection">
-        <div class="setup-section-heading"><span class="setup-step">2</span><strong>配置 AI</strong></div>
+        <div class="setup-section-heading"><span class="setup-step">3</span><strong>配置 AI</strong></div>
         <div class="setup-provider-grid">
           <label class="field">
             <span>API 服务类型</span>
@@ -334,9 +403,8 @@
       </section>
 
       <section class="setup-section compact">
-        <div class="setup-section-heading"><span class="setup-step">3</span><strong>排版设置</strong></div>
+        <div class="setup-section-heading"><span class="setup-step" id="setupTypesetStep">4</span><strong>排版设置</strong></div>
         <div class="setup-options-row">
-          <label class="field page-limit-field"><span>页数上限</span><input id="setupPageLimit" type="number" min="1" value="14"></label>
           <label class="toggle-row setup-toggle"><input id="setupAutoCompile" type="checkbox" checked><span>英文更新后自动编译</span></label>
           <div class="dependency-status" id="dependencyStatus"></div>
         </div>
@@ -399,6 +467,78 @@
     </form>
   </dialog>
 
+  <dialog class="structure-dialog" id="structureDialog">
+    <form class="structure-form" id="structureForm">
+      <div class="dialog-header">
+        <div>
+          <h2>按章节拆分论文</h2>
+          <div class="file-meta">先整体、后局部，参考文献独立维护</div>
+        </div>
+        <button class="icon-button" id="closeStructureButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="structure-body">
+        <div class="structure-summary" id="structureSummary"></div>
+        <div class="structure-flow" id="structureFlow"></div>
+        <div class="structure-file-list" id="structureFileList"></div>
+        <div class="structure-warning hidden" id="structureWarning"></div>
+      </div>
+      <div class="dialog-actions structure-actions">
+        <button class="button secondary" id="cancelStructureButton" type="button">取消</button>
+        <button class="button primary hidden" id="migrateBibliographyButton" type="button">
+          <i data-lucide="book-up"></i><span>一键迁移到 Bib</span>
+        </button>
+        <button class="button primary" id="applyStructureButton" type="submit">
+          <i data-lucide="split"></i><span>确认拆分并编译</span>
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="format-preflight-dialog" id="formatPreflightDialog">
+    <div class="dialog-header">
+      <div>
+        <h2>格式迁移前的论文结构</h2>
+        <div class="file-meta">检查结构 → 按章节处理 → 迁移并编译</div>
+      </div>
+      <button class="icon-button" id="closeFormatPreflightButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <div class="format-preflight-body">
+      <div class="structure-summary" id="formatPreflightSummary"></div>
+      <div class="structure-flow" id="formatPreflightFlow"></div>
+      <div class="format-preflight-warning" id="formatPreflightWarning"></div>
+    </div>
+    <div class="dialog-actions format-preflight-actions">
+      <button class="button secondary" id="cancelFormatPreflightButton" type="button">取消</button>
+      <button class="button secondary" id="continueWithoutSplitButton" type="button">
+        <i data-lucide="arrow-right"></i><span>不拆分，继续</span>
+      </button>
+      <button class="button primary" id="splitForFormatButton" type="button">
+        <i data-lucide="split"></i><span>一键拆分并继续</span>
+      </button>
+    </div>
+  </dialog>
+
+  <dialog class="main-tex-dialog" id="mainTexDialog">
+    <form method="dialog" class="main-tex-form" id="mainTexForm">
+      <div class="dialog-header">
+        <div>
+          <h2>选择主 TeX 文件</h2>
+          <div class="file-meta">ZIP 中包含多个完整 LaTeX 文档</div>
+        </div>
+      </div>
+      <div class="main-tex-body">
+        <label class="field">
+          <span>主 TeX 文件</span>
+          <select id="mainTexSelect"></select>
+        </label>
+        <p>请选择与 Overleaf 菜单中 Main document 相同的文件。PaperBridge 将以该文件编译 PDF。</p>
+      </div>
+      <div class="dialog-actions">
+        <button type="submit" class="button primary"><i data-lucide="check"></i><span>确认主文件</span></button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog class="settings-dialog" id="settingsDialog">
     <form method="dialog" class="settings-form" id="settingsForm">
       <div class="dialog-header">
@@ -410,6 +550,14 @@
       </div>
 
       <div class="settings-grid">
+        <label class="field wide">
+          <span>PaperBridge 数据目录</span>
+          <div class="path-input-row">
+            <input id="storageRootInput" type="text" autocomplete="off" readonly>
+            <button class="icon-button" id="chooseStorageFolderButton" type="button" title="更改数据目录"><i data-lucide="folder-cog"></i></button>
+          </div>
+          <small class="field-note">更改后会迁移配置、中文工作稿、备份和 PaperBridge 导入的项目。</small>
+        </label>
         <label class="field wide">
           <span>论文目录</span>
           <div class="path-input-row">
@@ -434,11 +582,8 @@
         </label>
         <label class="field">
           <span>主 TeX 文件</span>
-          <input id="mainTexInput" type="text" autocomplete="off">
-        </label>
-        <label class="field">
-          <span>页数上限</span>
-          <input id="pageLimitInput" type="number" min="1" step="1">
+          <input id="mainTexInput" type="text" list="mainTexCandidates" autocomplete="off">
+          <datalist id="mainTexCandidates"></datalist>
         </label>
       </div>
 
