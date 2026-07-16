@@ -146,11 +146,13 @@ function refreshIcons() {
 }
 
 function fitSegmentRow(row) {
-  const textareas = [...row.querySelectorAll(".segment-textarea")];
-  if (!textareas.length) return;
-  for (const textarea of textareas) textarea.style.height = "auto";
-  const height = Math.max(196, ...textareas.map((textarea) => textarea.scrollHeight + 2));
-  for (const textarea of textareas) textarea.style.height = `${height}px`;
+  const chinese = row.querySelector(".segment-textarea.chinese");
+  const english = row.querySelector(".segment-textarea.english");
+  if (!chinese || !english) return;
+  chinese.style.height = "auto";
+  const height = Math.max(196, chinese.scrollHeight + 2);
+  chinese.style.height = `${height}px`;
+  english.style.height = `${height}px`;
 }
 
 function fitAllSegmentRows() {
@@ -2699,6 +2701,7 @@ function providerMarkup(prefix) {
     <label class="field">
       <span>API Key</span>
       <input id="${prefix}ApiKey" type="password" autocomplete="new-password">
+      <small class="field-note provider-key-status" id="${prefix}ApiKeyStatus"></small>
     </label>
     <label class="field">
       <span>自定义路径</span>
@@ -2721,6 +2724,9 @@ function fillProvider(prefix, profile) {
   document.querySelector(`#${prefix}BaseUrl`).value = profile.baseUrl || "";
   document.querySelector(`#${prefix}ApiKey`).value = "";
   document.querySelector(`#${prefix}ApiKey`).placeholder = profile.hasApiKey ? "已保存，留空保持不变" : "";
+  const keyStatus = document.querySelector(`#${prefix}ApiKeyStatus`);
+  keyStatus.textContent = profile.hasApiKey ? "已保存 API Key" : "尚未配置 API Key";
+  keyStatus.classList.toggle("missing", !profile.hasApiKey);
   document.querySelector(`#${prefix}ApiPath`).value = profile.apiPath || "";
   document.querySelector(`#${prefix}ExtraHeaders`).value = profile.extraHeaders || "";
   document.querySelector(`#${prefix}JsonMode`).checked = Boolean(profile.jsonMode);

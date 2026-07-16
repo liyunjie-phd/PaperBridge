@@ -1,4 +1,4 @@
-PaperBridge 0.3.0 Windows 完整版使用说明
+PaperBridge 0.3.1 Windows 完整版使用说明
 ====================================
 
 一、版本说明

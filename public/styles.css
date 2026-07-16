@@ -830,6 +830,8 @@ body.workspace-split-dragging * {
 
 .segment-textarea.english {
   font-family: "Segoe UI", Arial, sans-serif;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .segment-textarea.changed {
@@ -2155,6 +2157,10 @@ body.workspace-split-dragging * {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.provider-key-status.missing {
+  color: var(--red);
 }
 
 .field > span {

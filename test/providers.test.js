@@ -38,3 +38,25 @@ test("provider adapters normalize OpenAI, Anthropic, and Gemini responses", asyn
 test("parseJsonResponse accepts fenced JSON", () => {
   assert.deepEqual(parseJsonResponse("```json\n{\"ok\":true}\n```"), { ok: true });
 });
+
+test("DeepSeek authentication failures provide actionable Chinese errors", async () => {
+  const request = { system: "system", user: "user", maxTokens: 16 };
+  await assert.rejects(
+    callProvider({ type: "openai-compatible", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" }, request),
+    (error) => error.code === "AI_API_KEY_MISSING" && /尚未配置 DeepSeek API Key/.test(error.message)
+  );
+
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(
+      JSON.stringify({ error: { message: "Authentication Fails (governor)" } }),
+      { status: 401, headers: { "Content-Type": "application/json" } }
+    );
+    await assert.rejects(
+      callProvider({ type: "openai-compatible", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", apiKey: "invalid" }, request),
+      (error) => error.code === "AI_AUTH_FAILED" && /AI 接口认证失败（401）/.test(error.message)
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
