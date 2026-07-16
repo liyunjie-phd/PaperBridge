@@ -372,6 +372,11 @@ textarea:focus-visible {
   border-top: 1px solid var(--border);
 }
 
+.terminology-open-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
 .metric-row {
   display: flex;
   align-items: center;
@@ -734,6 +739,53 @@ body.workspace-split-dragging * {
   background: var(--surface);
 }
 
+.segment-heading {
+  min-height: 34px;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 14px 2px 8px;
+  padding: 7px 10px;
+  border-left: 3px solid #2f7e63;
+  background: #f3f7f5;
+}
+
+.segment-heading.level-2 {
+  margin-left: 14px;
+  border-left-color: #3b82c4;
+  background: #f3f7fa;
+}
+
+.segment-heading.level-3 {
+  margin-left: 28px;
+  border-left-color: #7a858c;
+  background: #f6f7f8;
+}
+
+.segment-heading-kind,
+.segment-heading-line {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.segment-heading-kind {
+  font-weight: 750;
+}
+
+.segment-heading-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #263137;
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.segment-heading-line {
+  margin-left: auto;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
 .segment-row:focus-within {
   border-color: #8ba9bd;
   box-shadow: 0 0 0 2px rgba(59, 130, 196, 0.08);
@@ -832,6 +884,23 @@ body.workspace-split-dragging * {
   font-family: "Segoe UI", Arial, sans-serif;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  scrollbar-width: none;
+}
+
+.segment-textarea.english::-webkit-scrollbar {
+  width: 0;
+}
+
+.segment-row:hover .segment-textarea.english,
+.segment-textarea.english:hover,
+.segment-textarea.english:focus {
+  scrollbar-width: thin;
+}
+
+.segment-row:hover .segment-textarea.english::-webkit-scrollbar,
+.segment-textarea.english:hover::-webkit-scrollbar,
+.segment-textarea.english:focus::-webkit-scrollbar {
+  width: 10px;
 }
 
 .segment-textarea.changed {
@@ -1088,6 +1157,7 @@ body.workspace-split-dragging * {
   display: flex;
   flex-direction: column;
   position: absolute;
+  z-index: 20;
   right: 10px;
   bottom: 10px;
   left: 10px;
@@ -1563,6 +1633,7 @@ body.workspace-split-dragging * {
 .setup-dialog,
 .settings-dialog,
 .main-tex-dialog,
+.terminology-dialog,
 .paragraph-dialog,
 .git-push-dialog,
 .structure-dialog,
@@ -1589,6 +1660,10 @@ body.workspace-split-dragging * {
   width: min(520px, calc(100vw - 36px));
 }
 
+.terminology-dialog {
+  width: min(920px, calc(100vw - 36px));
+}
+
 .git-push-dialog {
   width: min(720px, calc(100vw - 36px));
 }
@@ -1600,6 +1675,7 @@ body.workspace-split-dragging * {
 .setup-dialog::backdrop,
 .settings-dialog::backdrop,
 .main-tex-dialog::backdrop,
+.terminology-dialog::backdrop,
 .paragraph-dialog::backdrop,
 .git-push-dialog::backdrop,
 .structure-dialog::backdrop,
@@ -1826,6 +1902,129 @@ body.workspace-split-dragging * {
   justify-content: space-between;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
+}
+
+.terminology-body {
+  max-height: min(560px, calc(100vh - 190px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  padding: 14px 16px;
+}
+
+.terminology-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminology-search {
+  min-width: 220px;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.terminology-search svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.terminology-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.terminology-help,
+.terminology-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.terminology-list {
+  min-height: 120px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.terminology-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) minmax(150px, 1.2fr) minmax(150px, 1fr) 118px 34px;
+  align-items: end;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+}
+
+.terminology-row label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.terminology-row label > span,
+.terminology-keep span {
+  color: #596169;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.terminology-row input[type="text"] {
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: white;
+}
+
+.terminology-keep {
+  height: 34px;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+  padding-bottom: 1px;
+}
+
+.terminology-keep input {
+  margin: 0;
+}
+
+.terminology-actions {
+  align-items: center;
+}
+
+.terminology-status {
+  min-width: 0;
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+.terminology-status.dirty {
+  color: var(--amber);
+}
+
+.terminology-status.saved {
+  color: var(--green);
 }
 
 .paragraph-dialog-body {

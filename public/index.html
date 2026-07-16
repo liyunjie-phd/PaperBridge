@@ -62,6 +62,9 @@
           <strong id="translationProgress">0%</strong>
         </div>
         <div class="progress-track"><div class="progress-fill" id="translationProgressBar"></div></div>
+        <button class="button secondary terminology-open-button" id="terminologyButton" type="button">
+          <i data-lucide="book-open"></i><span>查看术语表</span>
+        </button>
       </div>
     </aside>
 
@@ -77,9 +80,9 @@
             <span id="editorFontSize">16</span>
             <button class="icon-button small" id="increaseFontButton" title="增大字号"><i data-lucide="plus"></i></button>
           </div>
-          <select class="translation-section-select" id="translationSectionSelect" aria-label="选择要翻译的 LaTeX 节" title="选择要生成中文的节"></select>
-          <button class="button secondary" id="translateFileButton" title="为选中的节生成或更新中文版本">
-            <i data-lucide="languages"></i><span>翻译本节</span>
+          <select class="translation-section-select" id="translationSectionSelect" aria-label="当前 TeX 文件章节列表" title="当前 TeX 文件章节列表"></select>
+          <button class="button secondary" id="translateFileButton" title="为当前 TeX 文件的所有正文段落生成或更新中文版本">
+            <i data-lucide="languages"></i><span>翻译当前 TeX</span>
           </button>
         </div>
       </div>
@@ -416,6 +419,40 @@
         <button class="button primary" id="setupSubmitButton" type="submit"><i data-lucide="arrow-right"></i><span id="setupSubmitLabel">进入 PaperBridge</span></button>
       </div>
     </form>
+  </dialog>
+
+  <dialog class="terminology-dialog" id="terminologyDialog">
+    <div class="dialog-header">
+      <div>
+        <h2>术语表</h2>
+        <div class="file-meta" id="terminologyMeta">当前 TeX 文件的固定术语</div>
+      </div>
+      <button class="icon-button" id="closeTerminologyButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+    </div>
+    <div class="terminology-body">
+      <div class="terminology-toolbar">
+        <label class="terminology-search">
+          <i data-lucide="search"></i>
+          <input id="terminologySearch" type="search" autocomplete="off" placeholder="搜索中文、英文或备注">
+        </label>
+        <button class="button secondary" id="regenerateTerminologyButton" type="button">
+          <i data-lucide="sparkles"></i><span>AI 生成/刷新</span>
+        </button>
+        <button class="button secondary" id="addTerminologyButton" type="button">
+          <i data-lucide="plus"></i><span>新增术语</span>
+        </button>
+      </div>
+      <div class="terminology-help">这里的术语会优先用于全文翻译和单段改写。手动保存后，普通翻译不会自动覆盖它。</div>
+      <div class="terminology-list" id="terminologyList"></div>
+      <div class="terminology-empty hidden" id="terminologyEmpty">暂无术语。可以手动新增，或使用 AI 生成一份初始术语表。</div>
+    </div>
+    <div class="dialog-actions terminology-actions">
+      <span class="terminology-status" id="terminologyStatus"></span>
+      <button class="button secondary" id="cancelTerminologyButton" type="button">关闭</button>
+      <button class="button primary" id="saveTerminologyButton" type="button">
+        <i data-lucide="save"></i><span>保存术语表</span>
+      </button>
+    </div>
   </dialog>
 
   <dialog class="paragraph-dialog" id="paragraphDialog">

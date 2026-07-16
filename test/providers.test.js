@@ -60,3 +60,21 @@ test("DeepSeek authentication failures provide actionable Chinese errors", async
     globalThis.fetch = originalFetch;
   }
 });
+
+test("provider timeouts fail once with a visible Chinese error", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+    });
+    await assert.rejects(
+      callProvider(
+        { type: "openai-compatible", baseUrl: "https://example.test/v1", model: "m", apiKey: "k" },
+        { system: "system", user: "user", timeoutMs: 20, maxAttempts: 1 }
+      ),
+      (error) => error.code === "AI_PROVIDER_TIMEOUT" && /AI 接口在 1 秒内没有响应/.test(error.message)
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

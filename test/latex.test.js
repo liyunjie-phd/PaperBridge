@@ -53,6 +53,36 @@ test("parseSegments assigns prose to top-level LaTeX sections", () => {
   assert.deepEqual(parsed.segments.map((segment) => segment.sectionIndex), [0, 1, 1, 2]);
   assert.equal(parsed.segments[1].sectionId, parsed.segments[2].sectionId);
   assert.notEqual(parsed.segments[2].sectionId, parsed.segments[3].sectionId);
+  assert.deepEqual(parsed.segments.map((segment) => segment.heading?.title || ""), [
+    "",
+    "Introduction",
+    "Motivation",
+    "Method"
+  ]);
+  assert.deepEqual(parsed.segments[2].headingPath.map((heading) => heading.title), ["Introduction", "Motivation"]);
+  assert.equal(parsed.segments[2].heading.level, 2);
+});
+
+test("parseSegments preserves nested LaTeX titles for the bilingual editor", () => {
+  const source = [
+    "\\section[Short title]{System \\textit{Overview}}",
+    "The overview paragraph contains enough academic prose to remain editable in the bilingual view.",
+    "",
+    "\\subsection{Runtime Design}",
+    "The runtime paragraph also contains enough academic prose to remain visible for translation.",
+    "",
+    "\\subsubsection{Compile Cache}",
+    "The cache paragraph contains enough academic prose for a third level heading test."
+  ].join("\n");
+
+  const parsed = parseSegments(source, "main.tex");
+  assert.deepEqual(parsed.segments.map((segment) => segment.heading.title), [
+    "System Overview",
+    "Runtime Design",
+    "Compile Cache"
+  ]);
+  assert.deepEqual(parsed.segments[2].headingPath.map((heading) => heading.level), [1, 2, 3]);
+  assert.equal(parsed.segments[0].heading.latexTitle, "System \\textit{Overview}");
 });
 
 test("parseSegments excludes IEEE preamble, author metadata, math, and references", () => {
@@ -121,6 +151,18 @@ test("protected LaTeX tokens are detected", () => {
   const original = "Results improve by $35\\%$ as shown in Fig.~\\ref{system} and \\cite{cedar}.";
   const next = "Results improve by $35\\%$ according to \\cite{cedar}.";
   assert.deepEqual(findMissingProtectedTokens(original, "", next), ["\\ref{system}"]);
+});
+
+test("translation token checks allow soft English-only formatting edits", () => {
+  const original = "Results improve by $35\\%$ as shown in Fig.~\\ref{system} and prior work~\\cite{cedar}.";
+  const next = "Results improve by 35 percent in the revised text.";
+  assert.deepEqual(findMissingProtectedTokens(original, "", next, { allowSoftEnglishRemovals: true }), [
+    "\\ref{system}",
+    "\\cite{cedar}"
+  ]);
+  assert.deepEqual(findMissingProtectedTokens("", "Keep \\cite{cedar} in the sentence.", next, {
+    allowSoftEnglishRemovals: true
+  }), ["\\cite{cedar}"]);
 });
 
 test("AI LaTeX command analysis blocks dangerous additions and reports unexpected commands", () => {

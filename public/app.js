@@ -2,6 +2,8 @@ import * as pdfjsLib from "/vendor/pdfjs/pdf.mjs";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.mjs";
 
+const MAX_TERMINOLOGY_ENTRIES = 48;
+
 const state = {
   project: null,
   currentFile: null,
@@ -47,7 +49,11 @@ const state = {
   formatPreflightPreview: null,
   formatPreflightResolver: null,
   compileDiagnosisToken: 0,
-  compileDiagnosisFingerprint: ""
+  compileDiagnosisFingerprint: "",
+  dismissedBuildDrawerFingerprint: "",
+  terminologyFile: null,
+  terminologyEntries: [],
+  terminologyDirty: false
 };
 
 const elements = {
@@ -59,6 +65,7 @@ const elements = {
   documentList: document.querySelector("#documentList"),
   translationProgress: document.querySelector("#translationProgress"),
   translationProgressBar: document.querySelector("#translationProgressBar"),
+  terminologyButton: document.querySelector("#terminologyButton"),
   fileTranslationProgress: document.querySelector("#fileTranslationProgress"),
   fileTranslationProgressLabel: document.querySelector("#fileTranslationProgressLabel"),
   fileTranslationProgressCount: document.querySelector("#fileTranslationProgressCount"),
@@ -138,6 +145,15 @@ const elements = {
   formatPreflightWarning: document.querySelector("#formatPreflightWarning"),
   splitForFormatButton: document.querySelector("#splitForFormatButton"),
   continueWithoutSplitButton: document.querySelector("#continueWithoutSplitButton"),
+  terminologyDialog: document.querySelector("#terminologyDialog"),
+  terminologyMeta: document.querySelector("#terminologyMeta"),
+  terminologySearch: document.querySelector("#terminologySearch"),
+  terminologyList: document.querySelector("#terminologyList"),
+  terminologyEmpty: document.querySelector("#terminologyEmpty"),
+  terminologyStatus: document.querySelector("#terminologyStatus"),
+  regenerateTerminologyButton: document.querySelector("#regenerateTerminologyButton"),
+  addTerminologyButton: document.querySelector("#addTerminologyButton"),
+  saveTerminologyButton: document.querySelector("#saveTerminologyButton"),
   toastRegion: document.querySelector("#toastRegion")
 };
 
@@ -1047,6 +1063,17 @@ function dangerousLatexMessage(error) {
     : error.message;
 }
 
+function translationFailureMessage(error) {
+  const details = error.payload?.details || {};
+  if (Array.isArray(details.issues) && details.issues.length) {
+    return `${error.message}\n${details.issues.slice(0, 4).join("\n")}`;
+  }
+  const missing = details.missingTokens;
+  if (missing?.length) return `模型丢失 LaTeX 标记：${missing.join(", ")}`;
+  if (error.payload?.code === "DANGEROUS_LATEX_COMMANDS") return dangerousLatexMessage(error);
+  return error.message;
+}
+
 function fileLabel(file) {
   return file
     .replace(/\.tex$/i, "")
@@ -1055,7 +1082,7 @@ function fileLabel(file) {
 }
 
 function statusLabel(status) {
-  if (status === "synced") return "已对齐";
+  if (status === "synced") return "有中文";
   if (status === "pending") return "待更新";
   if (status === "english-changed") return "需重译";
   return "无中文";
@@ -1118,6 +1145,222 @@ function hideFileTranslationProgress() {
   elements.fileTranslationProgress.classList.remove("warning", "error");
   elements.fileTranslationProgressBar.style.width = "0%";
   elements.fileTranslationProgressTrack.setAttribute("aria-valuenow", "0");
+}
+
+function normalizeTerminologyEntry(entry = {}) {
+  return {
+    chinese: String(entry.chinese || "").trim(),
+    english: String(entry.english || entry.en || entry.term || "").trim(),
+    keepEnglish: entry.keepEnglish === true,
+    note: String(entry.note || "").trim()
+  };
+}
+
+function terminologyMatchesSearch(entry, query) {
+  if (!query) return true;
+  return [entry.chinese, entry.english, entry.note]
+    .some((value) => String(value || "").toLowerCase().includes(query));
+}
+
+function setTerminologyStatus(message = "", tone = "") {
+  elements.terminologyStatus.textContent = message;
+  elements.terminologyStatus.className = `terminology-status ${tone}`.trim();
+}
+
+function setTerminologyDirty(dirty = true) {
+  state.terminologyDirty = dirty;
+  setTerminologyStatus(dirty ? "有未保存的术语修改" : "术语表已保存", dirty ? "dirty" : "saved");
+}
+
+function updateTerminologyMeta(payload = null) {
+  const count = state.terminologyEntries.length;
+  const file = state.terminologyFile || state.currentFile;
+  const source = payload?.manual ? "手动维护" : payload?.cached ? "已缓存" : "当前文件";
+  elements.terminologyMeta.textContent = file
+    ? `${fileLabel(file)} · ${count} 条 · ${source}`
+    : "当前 TeX 文件的固定术语";
+}
+
+function renderTerminologyEntries() {
+  const query = elements.terminologySearch.value.trim().toLowerCase();
+  elements.terminologyList.replaceChildren();
+  let visible = 0;
+  state.terminologyEntries.forEach((entry, index) => {
+    if (!terminologyMatchesSearch(entry, query)) return;
+    visible += 1;
+    const row = document.createElement("div");
+    row.className = "terminology-row";
+    row.dataset.index = String(index);
+
+    const makeTextField = (field, labelText, placeholder = "") => {
+      const label = document.createElement("label");
+      const span = document.createElement("span");
+      const input = document.createElement("input");
+      span.textContent = labelText;
+      input.type = "text";
+      input.value = entry[field] || "";
+      input.placeholder = placeholder;
+      input.addEventListener("input", () => {
+        state.terminologyEntries[index][field] = input.value;
+        setTerminologyDirty(true);
+        updateTerminologyMeta();
+      });
+      label.append(span, input);
+      return label;
+    };
+
+    const keepLabel = document.createElement("label");
+    keepLabel.className = "terminology-keep";
+    const keepInput = document.createElement("input");
+    keepInput.type = "checkbox";
+    keepInput.checked = entry.keepEnglish === true;
+    keepInput.addEventListener("change", () => {
+      state.terminologyEntries[index].keepEnglish = keepInput.checked;
+      setTerminologyDirty(true);
+    });
+    const keepText = document.createElement("span");
+    keepText.textContent = "中文稿保留英文";
+    keepLabel.append(keepInput, keepText);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "icon-button small";
+    deleteButton.type = "button";
+    deleteButton.title = "删除术语";
+    deleteButton.innerHTML = '<i data-lucide="trash-2"></i>';
+    deleteButton.addEventListener("click", () => {
+      state.terminologyEntries.splice(index, 1);
+      setTerminologyDirty(true);
+      updateTerminologyMeta();
+      renderTerminologyEntries();
+    });
+
+    row.append(
+      makeTextField("chinese", "中文", "信标"),
+      makeTextField("english", "英文", "beacon"),
+      makeTextField("note", "备注", "可选"),
+      keepLabel,
+      deleteButton
+    );
+    elements.terminologyList.append(row);
+  });
+
+  elements.terminologyEmpty.textContent = state.terminologyEntries.length
+    ? "没有匹配的术语。"
+    : "暂无术语。可以手动新增，或使用 AI 生成一份初始术语表。";
+  elements.terminologyEmpty.classList.toggle("hidden", visible > 0);
+  refreshIcons();
+}
+
+async function openTerminologyDialog() {
+  if (!state.currentFile) {
+    toast("请先选择一个 TeX 文件。", "error");
+    return;
+  }
+  state.terminologyFile = state.currentFile;
+  state.terminologyEntries = [];
+  state.terminologyDirty = false;
+  elements.terminologySearch.value = "";
+  updateTerminologyMeta();
+  renderTerminologyEntries();
+  setTerminologyStatus("正在读取术语表...");
+  elements.terminologyDialog.showModal();
+  try {
+    const payload = await api(`/api/file/terminology?file=${encodeURIComponent(state.terminologyFile)}`);
+    state.terminologyEntries = (payload.entries || []).map(normalizeTerminologyEntry);
+    state.terminologyDirty = false;
+    updateTerminologyMeta(payload);
+    renderTerminologyEntries();
+    setTerminologyStatus(payload.cached ? "已读取缓存术语表" : "当前文件还没有术语表", payload.cached ? "saved" : "");
+  } catch (error) {
+    setTerminologyStatus("术语表读取失败", "dirty");
+    toast(error.message, "error", 5200);
+  }
+}
+
+function closeTerminologyDialog() {
+  if (state.terminologyDirty && !window.confirm("术语表有未保存修改，确定关闭吗？")) return;
+  elements.terminologyDialog.close();
+}
+
+function addTerminologyEntry() {
+  if (state.terminologyEntries.length >= MAX_TERMINOLOGY_ENTRIES) {
+    toast(`术语表最多保存 ${MAX_TERMINOLOGY_ENTRIES} 条。`, "error");
+    return;
+  }
+  state.terminologyEntries.push({ chinese: "", english: "", keepEnglish: false, note: "" });
+  elements.terminologySearch.value = "";
+  setTerminologyDirty(true);
+  updateTerminologyMeta();
+  renderTerminologyEntries();
+  elements.terminologyList.querySelector(".terminology-row:last-child input")?.focus();
+}
+
+function collectTerminologyEntries() {
+  const entries = state.terminologyEntries
+    .map(normalizeTerminologyEntry)
+    .filter((entry) => entry.chinese || entry.english || entry.note);
+  if (entries.length > MAX_TERMINOLOGY_ENTRIES) {
+    throw new Error(`术语表最多保存 ${MAX_TERMINOLOGY_ENTRIES} 条，请先删除一些术语。`);
+  }
+  if (entries.some((entry) => !entry.english)) {
+    throw new Error("每条术语都需要填写英文写法。");
+  }
+  return entries;
+}
+
+async function saveTerminology() {
+  if (!state.terminologyFile) return;
+  let entries;
+  try {
+    entries = collectTerminologyEntries();
+  } catch (error) {
+    toast(error.message, "error", 5200);
+    return;
+  }
+  setBusy(elements.saveTerminologyButton, true);
+  setTerminologyStatus("正在保存术语表...");
+  try {
+    const payload = await api("/api/file/terminology", {
+      method: "PUT",
+      body: JSON.stringify({ file: state.terminologyFile, entries })
+    });
+    state.terminologyEntries = (payload.entries || []).map(normalizeTerminologyEntry);
+    state.terminologyDirty = false;
+    updateTerminologyMeta(payload);
+    renderTerminologyEntries();
+    setTerminologyStatus("术语表已保存，后续翻译会优先使用它", "saved");
+    toast("术语表已保存。", "success");
+  } catch (error) {
+    setTerminologyStatus("术语表保存失败", "dirty");
+    toast(error.message, "error", 5200);
+  } finally {
+    setBusy(elements.saveTerminologyButton, false);
+  }
+}
+
+async function regenerateTerminology() {
+  if (!state.terminologyFile) return;
+  if (state.terminologyDirty && !window.confirm("AI 生成会覆盖当前未保存的术语修改，继续吗？")) return;
+  if (!state.terminologyDirty && state.terminologyEntries.length && !window.confirm("AI 生成会重新覆盖当前术语表，继续吗？")) return;
+  setBusy(elements.regenerateTerminologyButton, true);
+  setTerminologyStatus("正在让 AI 生成术语表...");
+  try {
+    const payload = await api("/api/file/terminology", {
+      method: "POST",
+      body: JSON.stringify({ file: state.terminologyFile, force: true })
+    });
+    state.terminologyEntries = (payload.entries || []).map(normalizeTerminologyEntry);
+    state.terminologyDirty = false;
+    updateTerminologyMeta(payload);
+    renderTerminologyEntries();
+    setTerminologyStatus(`AI 已生成 ${state.terminologyEntries.length} 条术语`, "saved");
+    toast(`AI 已生成 ${state.terminologyEntries.length} 条术语。`, "success");
+  } catch (error) {
+    setTerminologyStatus("AI 生成术语表失败", "dirty");
+    toast(error.message, "error", 6200);
+  } finally {
+    setBusy(elements.regenerateTerminologyButton, false);
+  }
 }
 
 function renderDocumentList() {
@@ -1275,10 +1518,26 @@ function updateWarnings(warnings = [], layoutChanges = [], errors = []) {
 function clearCompileDiagnosis() {
   state.compileDiagnosisToken += 1;
   state.compileDiagnosisFingerprint = "";
+  state.dismissedBuildDrawerFingerprint = "";
   elements.compileDiagnosis.classList.add("hidden");
   elements.compileDiagnosisStatus.textContent = "";
   elements.compileDiagnosisSummary.textContent = "";
   elements.compileDiagnosisList.replaceChildren();
+}
+
+function closeBuildDrawer() {
+  state.dismissedBuildDrawerFingerprint = state.compileDiagnosisFingerprint || state.dismissedBuildDrawerFingerprint;
+  elements.buildDrawer.classList.add("hidden");
+}
+
+function toggleBuildDrawer() {
+  const closed = elements.buildDrawer.classList.contains("hidden");
+  if (closed) {
+    state.dismissedBuildDrawerFingerprint = "";
+    elements.buildDrawer.classList.remove("hidden");
+  } else {
+    closeBuildDrawer();
+  }
 }
 
 async function openSourceLocation(file, line) {
@@ -1343,7 +1602,9 @@ async function diagnoseBuild(build) {
   const token = ++state.compileDiagnosisToken;
   state.compileDiagnosisFingerprint = fingerprint;
   elements.compileDiagnosis.classList.remove("hidden");
-  elements.buildDrawer.classList.remove("hidden");
+  if (state.dismissedBuildDrawerFingerprint !== fingerprint) {
+    elements.buildDrawer.classList.remove("hidden");
+  }
   elements.compileDiagnosisStatus.textContent = "分析中";
   elements.compileDiagnosisSummary.textContent = "AI 正在定位错误...";
   elements.compileDiagnosisList.replaceChildren();
@@ -1428,6 +1689,7 @@ function createSegmentRow(segment) {
       <div class="segment-actions">
         <button class="mini-button add-paragraph-button" type="button" title="在本段前后新增段落"><i data-lucide="plus"></i></button>
         <button class="mini-button translate-chinese-button" type="button" title="仅翻译本段到中文"><i data-lucide="languages"></i></button>
+        <button class="mini-button comment-paragraph-button" type="button" title="注释本段（Ctrl+/）"><i data-lucide="percent"></i></button>
         <button class="mini-button translate-button accent" type="button" title="用中文更新英文"><i data-lucide="arrow-right"></i></button>
         <button class="mini-button save-english-button" type="button" title="保存英文修改"><i data-lucide="save"></i></button>
         <button class="mini-button revert-button" type="button" title="恢复已加载的英文"><i data-lucide="undo-2"></i></button>
@@ -1445,6 +1707,7 @@ function createSegmentRow(segment) {
   const english = row.querySelector(".english");
   const addParagraphButton = row.querySelector(".add-paragraph-button");
   const translateChineseButton = row.querySelector(".translate-chinese-button");
+  const commentParagraphButton = row.querySelector(".comment-paragraph-button");
   const translateButton = row.querySelector(".translate-button");
   const saveEnglishButton = row.querySelector(".save-english-button");
   const revertButton = row.querySelector(".revert-button");
@@ -1456,13 +1719,9 @@ function createSegmentRow(segment) {
   status.className = `segment-status ${segment.translationStatus}`;
   chinese.value = segment.chinese || "";
   english.value = segment.english;
-  if (segment.chinese) translateChineseButton.title = "本段中文已生成";
+  if (segment.chinese) translateChineseButton.title = "重新翻译本段到中文";
 
   translateChineseButton.addEventListener("click", async () => {
-    if (segment.chinese) {
-      toast("本段已经有中文工作稿，不会重复调用翻译接口。", "success");
-      return;
-    }
     setBusy(translateChineseButton, true);
     setFileTranslationProgress(0, 1, `P${String(segment.index + 1).padStart(2, "0")} · 正在翻译本段...`);
     try {
@@ -1471,7 +1730,8 @@ function createSegmentRow(segment) {
         body: JSON.stringify({
           file: segment.file,
           sectionId: segment.sectionId,
-          segmentIds: [segment.id]
+          segmentIds: [segment.id],
+          force: true
         })
       });
       state.currentDocument = result.document;
@@ -1496,15 +1756,67 @@ function createSegmentRow(segment) {
     window.clearTimeout(state.saveTimers.get(segment.id));
     state.saveTimers.set(segment.id, window.setTimeout(async () => {
       try {
-        await api("/api/segment/chinese", {
+        const saved = await api("/api/segment/chinese", {
           method: "POST",
-          body: JSON.stringify({ file: segment.file, index: segment.index, chinese: chinese.value })
+          body: JSON.stringify({
+            file: segment.file,
+            index: segment.index,
+            sourceHash: segment.sourceHash,
+            chinese: chinese.value
+          })
         });
-        chinese.classList.remove("changed");
+        if (!saved.stale) chinese.classList.remove("changed");
       } catch (error) {
         toast(error.message, "error");
       }
     }, 700));
+  });
+
+  const commentParagraph = async () => {
+    const englishSelection = english.selectionEnd > english.selectionStart
+      ? { selectionStart: english.selectionStart, selectionEnd: english.selectionEnd }
+      : null;
+    const chineseSelection = chinese.selectionEnd > chinese.selectionStart;
+    if (!englishSelection && chineseSelection) {
+      toast("中文选区无法安全定位到 TeX 源码；请在右侧英文 LaTeX 中选择对应内容，或取消选择后注释整段。", "warning", 6200);
+      return;
+    }
+    window.clearTimeout(state.saveTimers.get(segment.id));
+    state.saveTimers.delete(segment.id);
+    setBusy(commentParagraphButton, true);
+    try {
+      const result = await api("/api/segment/comment", {
+        method: "POST",
+        body: JSON.stringify({
+          file: segment.file,
+          index: segment.index,
+          sourceHash: segment.sourceHash,
+          chinese: chinese.value,
+          ...(englishSelection || {})
+        })
+      });
+      state.currentDocument = result.document;
+      renderSegments();
+      updateBuild(result.build);
+      await refreshProject();
+      toast("本段已注释，TeX 源码仍然保留。", "success", 4600);
+    } catch (error) {
+      toast(error.message, "error", 5600);
+    } finally {
+      setBusy(commentParagraphButton, false);
+    }
+  };
+
+  commentParagraphButton.addEventListener("click", commentParagraph);
+  chinese.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault();
+    if (!commentParagraphButton.disabled) void commentParagraph();
+  });
+  english.addEventListener("keydown", (event) => {
+    if (event.key !== "/" || (!event.ctrlKey && !event.metaKey)) return;
+    event.preventDefault();
+    if (!commentParagraphButton.disabled) void commentParagraph();
   });
 
   english.addEventListener("input", () => {
@@ -1521,42 +1833,46 @@ function createSegmentRow(segment) {
       return;
     }
     setBusy(translateButton, true);
+    status.textContent = "正在翻译…";
+    status.className = "segment-status pending";
+    status.title = "正在请求 AI，完成后将自动编译。";
+    setFileTranslationProgress(1, 3, `P${String(segment.index + 1).padStart(2, "0")} · 正在请求 AI 翻译...`);
+    let translated = false;
+    const slowTimer = window.setTimeout(() => {
+      if (!translated) setFileTranslationProgress(1, 3, "AI 仍在处理中，请稍候；超时后会自动提示。", "warning");
+    }, 15_000);
     try {
-      let approvalToken = "";
-      let result;
-      while (!result) {
-        try {
-          result = await api("/api/segment/translate", {
-            method: "POST",
-            body: JSON.stringify({
-              file: segment.file,
-              index: segment.index,
-              sourceHash: segment.sourceHash,
-              chinese: chinese.value,
-              approvalToken
-            })
-          });
-        } catch (error) {
-          if (confirmUnexpectedLatexCommands(error)) {
-            approvalToken = error.payload.details.approvalToken;
-            continue;
-          }
-          throw error;
-        }
-      }
+      const result = await api("/api/segment/translate", {
+        method: "POST",
+        body: JSON.stringify({
+          file: segment.file,
+          index: segment.index,
+          sourceHash: segment.sourceHash,
+          chinese: chinese.value,
+          deferCompile: true
+        })
+      });
+      translated = true;
+      window.clearTimeout(slowTimer);
       state.currentDocument = result.document;
       renderSegments();
-      updateBuild(result.build);
+      setFileTranslationProgress(2, 3, "英文已更新 · 正在编译 PDF...");
+      const build = await api("/api/compile", { method: "POST", body: JSON.stringify({ fast: true }) });
+      updateBuild(build);
       await refreshProject();
-      toast("英文段落已更新。", "success");
+      setFileTranslationProgress(3, 3, build.success ? "英文与 PDF 已更新" : "英文已更新，但编译存在错误", build.success ? "" : "error");
+      toast(build.success ? "英文段落和 PDF 已更新。" : "英文段落已更新，但 PDF 编译存在错误。", build.success ? "success" : "error", 5600);
     } catch (error) {
-      const missing = error.payload?.details?.missingTokens;
+      window.clearTimeout(slowTimer);
+      const message = translationFailureMessage(error);
+      setFileTranslationProgress(translated ? 2 : 0, 3, translated ? `英文已更新，但编译失败：${message}` : `翻译失败：${message}`, "error");
+      if (!translated) {
+        status.textContent = "翻译失败";
+        status.className = "segment-status english-changed";
+        status.title = message;
+      }
       toast(
-        missing?.length
-          ? `模型丢失 LaTeX 标记：${missing.join(", ")}`
-          : error.payload?.code === "DANGEROUS_LATEX_COMMANDS"
-            ? dangerousLatexMessage(error)
-            : error.message,
+        message,
         "error",
         6200
       );
@@ -1752,7 +2068,33 @@ function renderSegments() {
     empty.textContent = "此文件没有检测到可编辑的正文段落";
     elements.segmentList.append(empty);
   } else {
-    for (const segment of documentPayload.segments) elements.segmentList.append(createSegmentRow(segment));
+    let previousHeadingPath = [];
+    for (const segment of documentPayload.segments) {
+      const headingPath = Array.isArray(segment.headingPath) ? segment.headingPath : [];
+      let commonLength = 0;
+      while (
+        commonLength < previousHeadingPath.length
+        && commonLength < headingPath.length
+        && previousHeadingPath[commonLength].id === headingPath[commonLength].id
+      ) commonLength += 1;
+      for (const heading of headingPath.slice(commonLength)) {
+        const node = document.createElement("div");
+        node.className = `segment-heading level-${heading.level}`;
+        const kind = document.createElement("span");
+        kind.className = "segment-heading-kind";
+        kind.textContent = heading.level === 1 ? "章节" : heading.level === 2 ? "小节" : "三级标题";
+        const title = document.createElement("strong");
+        title.className = "segment-heading-title";
+        title.textContent = heading.title;
+        const line = document.createElement("span");
+        line.className = "segment-heading-line";
+        line.textContent = `L${heading.line}`;
+        node.append(kind, title, line);
+        elements.segmentList.append(node);
+      }
+      elements.segmentList.append(createSegmentRow(segment));
+      previousHeadingPath = headingPath;
+    }
   }
   fitAllSegmentRows();
   renderDocumentList();
@@ -1779,6 +2121,30 @@ function sourceLineCount() {
 function updateSourceLineNumbers() {
   const count = sourceLineCount();
   elements.sourceLineNumbers.textContent = Array.from({ length: count }, (_value, index) => index + 1).join("\n");
+}
+
+function toggleSourceLineComments() {
+  const editor = elements.sourceEditor;
+  const value = editor.value;
+  const selectionStart = editor.selectionStart;
+  const selectionEnd = editor.selectionEnd;
+  const effectiveEnd = selectionEnd > selectionStart && value[selectionEnd - 1] === "\n"
+    ? selectionEnd - 1
+    : selectionEnd;
+  const rangeStart = value.lastIndexOf("\n", Math.max(0, selectionStart - 1)) + 1;
+  const nextBreak = value.indexOf("\n", effectiveEnd);
+  const rangeEnd = nextBreak === -1 ? value.length : nextBreak;
+  const lines = value.slice(rangeStart, rangeEnd).split("\n");
+  const contentLines = lines.filter((line) => line.trim());
+  const uncomment = contentLines.length > 0 && contentLines.every((line) => /^\s*%/.test(line));
+  const replacement = lines.map((line) => {
+    if (!line.trim()) return line;
+    return uncomment
+      ? line.replace(/^(\s*)%\s?/, "$1")
+      : line.replace(/^(\s*)/, "$1% ");
+  }).join("\n");
+  editor.setRangeText(replacement, rangeStart, rangeEnd, "select");
+  editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function setSourceDirty(dirty) {
@@ -2165,36 +2531,38 @@ async function pushPaper() {
 async function translateCurrentFile() {
   const button = document.querySelector("#translateFileButton");
   if (!state.currentFile || !state.currentDocument) return;
-  const sectionId = state.currentSectionId || elements.translationSectionSelect.value;
-  const sectionLabel = elements.translationSectionSelect.selectedOptions[0]?.textContent || "当前节";
   const pendingIds = state.currentDocument.segments
-    .filter((segment) => (segment.sectionId || `${state.currentFile}:section:0`) === sectionId)
-    .filter((segment) => !segment.chinese || segment.translationStatus !== "synced")
     .map((segment) => segment.id);
   if (!pendingIds.length) {
-    toast("当前节没有需要生成或更新的中文段落。", "success");
+    toast("当前 TeX 文件没有可翻译的段落。", "success");
     return;
   }
+  const currentFileLabel = state.currentFile;
   const total = pendingIds.length;
   let completed = 0;
   let translated = 0;
   let skipped = 0;
   setBusy(button, true);
-  setFileTranslationProgress(0, total, `${sectionLabel} · 正在准备翻译...`);
+  setFileTranslationProgress(0, total, `${currentFileLabel} · 正在生成术语表...`);
   try {
-    for (let offset = 0; offset < pendingIds.length; offset += 8) {
-      const segmentIds = pendingIds.slice(offset, offset + 8);
+    const terminology = await api("/api/file/terminology", {
+      method: "POST",
+      body: JSON.stringify({ file: state.currentFile })
+    });
+    setFileTranslationProgress(0, total, `${currentFileLabel} · 术语表 ${terminology.entries?.length || 0} 条，正在准备翻译...`);
+    for (let offset = 0; offset < pendingIds.length; offset += 1) {
+      const segmentIds = pendingIds.slice(offset, offset + 1);
       const end = Math.min(offset + segmentIds.length, total);
-      setFileTranslationProgress(completed, total, `${sectionLabel} · 正在翻译第 ${offset + 1}-${end} 段...`);
+      setFileTranslationProgress(completed, total, `${currentFileLabel} · 正在翻译第 ${offset + 1}-${end} 段...`);
       const result = await api("/api/file/translate-to-chinese", {
         method: "POST",
-        body: JSON.stringify({ file: state.currentFile, sectionId, segmentIds })
+        body: JSON.stringify({ file: state.currentFile, segmentIds, force: true })
       });
       state.currentDocument = result.document;
       completed += result.progress?.attempted ?? segmentIds.length;
       translated += result.progress?.translated ?? 0;
       skipped += result.progress?.skipped ?? 0;
-      setFileTranslationProgress(completed, total, `${sectionLabel} · 已处理 ${completed} 个段落`);
+      setFileTranslationProgress(completed, total, `${currentFileLabel} · 已处理 ${completed} 个段落`);
     }
     renderSegments();
     await refreshProject();
@@ -2850,6 +3218,22 @@ function bindEvents() {
   document.querySelector("#pullButton").addEventListener("click", pullPaper);
   document.querySelector("#pushButton").addEventListener("click", pushPaper);
   document.querySelector("#translateFileButton").addEventListener("click", translateCurrentFile);
+  elements.terminologyButton.addEventListener("click", openTerminologyDialog);
+  document.querySelector("#closeTerminologyButton").addEventListener("click", closeTerminologyDialog);
+  document.querySelector("#cancelTerminologyButton").addEventListener("click", closeTerminologyDialog);
+  elements.terminologyDialog.addEventListener("cancel", (event) => {
+    if (!state.terminologyDirty) return;
+    if (!window.confirm("术语表有未保存修改，确定关闭吗？")) event.preventDefault();
+  });
+  elements.terminologyDialog.addEventListener("close", () => {
+    state.terminologyFile = null;
+    state.terminologyEntries = [];
+    state.terminologyDirty = false;
+  });
+  elements.terminologySearch.addEventListener("input", renderTerminologyEntries);
+  elements.addTerminologyButton.addEventListener("click", addTerminologyEntry);
+  elements.saveTerminologyButton.addEventListener("click", saveTerminology);
+  elements.regenerateTerminologyButton.addEventListener("click", regenerateTerminology);
   document.querySelector("#decreaseFontButton").addEventListener("click", () => changeEditorFont(-1));
   document.querySelector("#increaseFontButton").addEventListener("click", () => changeEditorFont(1));
   elements.workspaceSplitHandle.addEventListener("pointerdown", (event) => {
@@ -2997,6 +3381,11 @@ function bindEvents() {
     elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
   }, { passive: true });
   elements.sourceEditor.addEventListener("keydown", (event) => {
+    if (event.key === "/" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      toggleSourceLineComments();
+      return;
+    }
     if (event.key === "Tab") {
       event.preventDefault();
       elements.sourceEditor.setRangeText("  ", elements.sourceEditor.selectionStart, elements.sourceEditor.selectionEnd, "end");
@@ -3031,8 +3420,8 @@ function bindEvents() {
   elements.pdfScroll.addEventListener("dblclick", (event) => void locatePdfSelection(event));
   elements.pdfScroll.addEventListener("scroll", updateVisiblePdfPage, { passive: true });
   window.addEventListener("resize", () => schedulePdfPanelResize());
-  document.querySelector("#warningsButton").addEventListener("click", () => elements.buildDrawer.classList.toggle("hidden"));
-  document.querySelector("#closeWarningsButton").addEventListener("click", () => elements.buildDrawer.classList.add("hidden"));
+  document.querySelector("#warningsButton").addEventListener("click", toggleBuildDrawer);
+  document.querySelector("#closeWarningsButton").addEventListener("click", closeBuildDrawer);
   document.querySelectorAll(".mode-button").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
   window.addEventListener("beforeunload", (event) => {
     if (!state.sourceDirty) return;
