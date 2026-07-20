@@ -5,6 +5,10 @@ data/
 projects/
 release/
 resources/bin/
+.codex-lrtp-probe/
+.DS_Store
+template/**/*.zip
+template/**/*.pdf
 
 *.log
 .env

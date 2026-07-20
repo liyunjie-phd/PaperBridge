@@ -331,11 +331,12 @@ test("concurrent adjacent paragraph English updates are serialized and stay dist
   }
 });
 
-test("file terminology is generated before Chinese translation and reused in prompts", async () => {
+test("file terminology is extracted locally before Chinese translation and reused in prompts", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-terminology-"));
   const projectRoot = path.join(root, "project");
   let providerServer;
   const translationPrompts = [];
+  let generationCalls = 0;
   try {
     await fs.mkdir(projectRoot);
     await fs.writeFile(
@@ -350,6 +351,7 @@ test("file terminology is generated before Chinese translation and reused in pro
         "\\caption{Terminology table}",
         "\\end{table}",
         "\\section{Introduction}",
+        "Low Earth Orbit (LEO) satellite links require repeated terminology consistency.",
         "The beacon interval controls the synchronization cadence for low-earth-orbit satellite links.",
         "\\end{document}"
       ].join("\n"),
@@ -363,6 +365,7 @@ test("file terminology is generated before Chinese translation and reused in pro
       const user = payload.messages.find((message) => message.role === "user")?.content || "";
       response.writeHead(200, { "Content-Type": "application/json" });
       if (system.includes("You build a compact bilingual terminology glossary")) {
+        generationCalls += 1;
         response.end(JSON.stringify({
           choices: [{ message: { content: JSON.stringify({ terms: [{ english: "beacon", chinese: "信标", keepEnglish: false }] }) } }]
         }));
@@ -411,7 +414,10 @@ test("file terminology is generated before Chinese translation and reused in pro
       autoCompile: false
     });
     const terminology = await request("/api/file/terminology", { file: "main.tex", force: true });
-    assert.deepEqual(terminology.entries.map((entry) => [entry.chinese, entry.english]), [["信标", "beacon"]]);
+    assert.equal(generationCalls, 0);
+    const pairs = terminology.entries.map((entry) => [entry.chinese, entry.english]);
+    assert.ok(pairs.some((pair) => pair[0] === "信标" && pair[1] === "beacon"));
+    assert.ok(pairs.some((pair) => pair[0] === "LEO" && pair[1] === "LEO"));
     const document = await request("/api/document?file=main.tex");
     const result = await request("/api/file/translate-to-chinese", {
       file: "main.tex",

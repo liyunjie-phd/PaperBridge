@@ -18,6 +18,7 @@ import {
   insertSegment,
   isSoftLatexCommandSignature,
   isSoftProtectedToken,
+  parseSegments,
   readDocument,
   replaceSegment,
   resolveProjectFile
@@ -115,7 +116,7 @@ const DEFAULT_CONFIG = {
   projectRoot: "",
   mainTex: "",
   port: 4317,
-  autoCompile: true,
+  autoCompile: false,
   overleafToken: "",
   gitUsername: "",
   gitToken: "",
@@ -422,6 +423,7 @@ async function getDocumentPayload(file) {
   const state = await loadState();
   return {
     file,
+    mathBlocks: document.mathBlocks || [],
     segments: document.segments.map((segment) => {
       const translation = resolveTranslation(state, segment);
       return {
@@ -509,6 +511,38 @@ function getSegment(document, index) {
   const segment = document.segments[Number(index)];
   if (!segment) throw new Error("The selected paragraph no longer exists.");
   return segment;
+}
+
+function getMathBlock(document, blockId, sourceHash, startLine) {
+  const blocks = document.mathBlocks || [];
+  let candidates = blockId
+    ? blocks.filter((block) => block.id === String(blockId))
+    : [];
+  if (!candidates.length && sourceHash) {
+    candidates = blocks.filter((block) => block.sourceHash === String(sourceHash));
+  }
+  const line = Number(startLine);
+  if (candidates.length > 1 && Number.isFinite(line) && line > 0) {
+    const sameLine = candidates.filter((block) => Number(block.startLine) === line);
+    if (sameLine.length) candidates = sameLine;
+  }
+  if (!candidates.length) {
+    const error = new Error("The selected formula no longer exists. Reload the document before saving.");
+    error.code = "SOURCE_CHANGED";
+    throw error;
+  }
+  if (candidates.length > 1) {
+    const error = new Error("Multiple identical formulas were found. Reload the document and save the target formula again.");
+    error.code = "AMBIGUOUS_MATH_BLOCK";
+    throw error;
+  }
+  const block = candidates[0];
+  if (sourceHash && block.sourceHash !== String(sourceHash)) {
+    const error = new Error("The formula source changed after it was loaded. Reload it before saving.");
+    error.code = "SOURCE_CHANGED";
+    throw error;
+  }
+  return block;
 }
 
 async function storeChinese(segment, chinese, nextSourceHash = segment.sourceHash, pendingEnglish = false) {
@@ -937,6 +971,7 @@ function translationPrompt(segment, chinese, previous, next, correction = "", te
       "The current English is a style and terminology reference, not a source that must be copied.",
       terminology ? "Follow the terminology glossary exactly: Chinese terms must map to the listed English terms, and listed English terms must not be replaced with synonyms." : "",
       "Preserve every LaTeX command, citation, reference, inline formula, symbol, number, and factual claim.",
+      "Treat the Chinese revision as the source of truth: if it removes an old citation/reference, remove it; if it adds a citation/reference, preserve it exactly.",
       "This is a text-only replacement: never introduce a LaTeX command or formatting wrapper that is absent from both the current English and Chinese revision.",
       "Return exactly one paragraph with no blank line, heading, duplicate copy, or repeated original text.",
       "Do not add evidence, results, citations, or claims. Do not output Markdown fences or commentary.",
@@ -953,18 +988,17 @@ function translationPrompt(segment, chinese, previous, next, correction = "", te
   };
 }
 
-function isOptionalTranslationCommand(command) {
-  const value = String(command || "");
-  return isSoftLatexCommandSignature(value)
-    || /^\\cite[A-Za-z@]*$/.test(value)
-    || value === "\\ref";
-}
-
 function isOptionalTranslationToken(token) {
   const value = String(token || "");
   return isSoftProtectedToken(value)
     || /^\\cite\w*\s*(?:\[[^\]]*\]\s*)*\{[^{}]*\}$/.test(value)
     || /^\\ref\s*(?:\[[^\]]*\]\s*)*\{[^{}]*\}$/.test(value);
+}
+
+function findMissingRequiredDraftTokens(draft, output) {
+  return extractProtectedTokens(draft)
+    .filter((token) => !isSoftProtectedToken(token))
+    .filter((token) => !String(output || "").includes(token));
 }
 
 function normalizeTerminologyEntries(entries) {
@@ -980,7 +1014,7 @@ function normalizeTerminologyEntries(entries) {
 }
 
 function terminologySignature(document) {
-  return hashText(document.segments.map((segment) => `${segment.id}:${segment.sourceHash}`).join("\n"));
+  return hashText(document.content || document.segments.map((segment) => `${segment.id}:${segment.sourceHash}`).join("\n"));
 }
 
 function terminologyText(entries = []) {
@@ -1006,6 +1040,193 @@ function terminologyTableHints(content) {
     }
   }
   return [...new Set(blocks)].slice(0, 6).join("\n\n");
+}
+
+const TERMINOLOGY_STOP_WORDS = new Set(["a", "an", "and", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with"]);
+const TERMINOLOGY_TABLE_HINT = /term|terminology|glossary|notation|symbol|abbreviation|acronym|术语|符号|缩写/i;
+const TERMINOLOGY_HEADER = /^(term|terms|terminology|glossary|notation|symbol|abbreviation|acronym|english|chinese|中文|英文|术语|符号|缩写|definition|description)$/i;
+
+function isEscapedTexCharacter(source, index) {
+  let count = 0;
+  for (let cursor = index - 1; cursor >= 0 && source[cursor] === "\\"; cursor -= 1) count += 1;
+  return count % 2 === 1;
+}
+
+function stripTexLineComment(line) {
+  const source = String(line || "");
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "%" && !isEscapedTexCharacter(source, index)) return source.slice(0, index);
+  }
+  return source;
+}
+
+function stripTerminologyLatex(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map(stripTexLineComment)
+    .join("\n")
+    .replace(/\\(?:begin|end)\s*\{[^{}]+\}(?:\{[^{}]*\})?/g, " ")
+    .replace(/\\(?:textbf|textit|emph|texttt|mathrm|mathbf|mathsf|operatorname)\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\(?:cite\w*|ref|eqref|autoref|cref|Cref|pageref|label|url)\s*(?:\[[^\]]*\]\s*)*\{[^{}]*\}/g, " ")
+    .replace(/\\(?:caption|section|subsection|subsubsection|paragraph|subparagraph)\*?(?:\[[^\]]*\])?\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\[a-zA-Z@]+\*?(?:\[[^\]]*\])?/g, " ")
+    .replace(/\\([%&#_$])/g, "$1")
+    .replace(/[{}]/g, " ")
+    .replace(/~+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeTerminologyTerm(value) {
+  return stripTerminologyLatex(value)
+    .replace(/^[\s,;:|/\\-]+|[\s,;:|/\\.-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasCjk(value) {
+  return /[\u3400-\u9fff]/u.test(String(value || ""));
+}
+
+function isLikelyAcronym(value) {
+  const raw = String(value || "").trim();
+  const compact = raw.replace(/[^A-Za-z0-9]/g, "");
+  if (compact.length < 2 || compact.length > 12) return false;
+  if (!/[A-Z]/.test(raw)) return false;
+  if (!/^[A-Za-z0-9-]+$/.test(raw)) return false;
+  return !new Set(["AL", "ET", "FIG", "IEEE", "ACM"]).has(compact.toUpperCase());
+}
+
+function isLikelyEnglishTerm(value) {
+  const text = normalizeTerminologyTerm(value);
+  if (!/[A-Za-z]/.test(text) || hasCjk(text)) return false;
+  if (text.length > 80 || /[.!?]/.test(text)) return false;
+  const words = text.match(/[A-Za-z0-9]+/g) || [];
+  return words.length > 0 && words.length <= 8 && !TERMINOLOGY_HEADER.test(text);
+}
+
+function isLikelyChineseTerm(value) {
+  const text = normalizeTerminologyTerm(value);
+  return hasCjk(text) && text.length <= 40 && !/[.!?。！？]/.test(text) && !TERMINOLOGY_HEADER.test(text);
+}
+
+function acronymLetters(value) {
+  return String(value || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+function acronymMatchesWords(words, acronym) {
+  const target = acronymLetters(acronym);
+  const allInitials = words.map((word) => word[0]).join("").toUpperCase();
+  const significantInitials = words
+    .filter((word) => !TERMINOLOGY_STOP_WORDS.has(word.toLowerCase()))
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase();
+  return allInitials === target || significantInitials === target;
+}
+
+function inferAcronymFullTerm(prefix, acronym) {
+  const text = normalizeTerminologyTerm(prefix);
+  const cjk = text.match(/([\u3400-\u9fff][\u3400-\u9fffA-Za-z0-9·\-—\s]{1,38})$/u)?.[1]?.trim();
+  if (cjk && isLikelyChineseTerm(cjk)) return cjk;
+  const words = text.match(/[A-Za-z0-9]+/g) || [];
+  for (let count = 1; count <= Math.min(10, words.length); count += 1) {
+    const candidate = words.slice(words.length - count);
+    if (acronymMatchesWords(candidate, acronym)) return candidate.join(" ");
+  }
+  return "";
+}
+
+function addTerminologyEntry(entries, entry) {
+  const normalized = normalizeTerminologyEntries([entry])[0];
+  if (!normalized) return;
+  const duplicate = entries.find((item) => (
+    item.english.toLowerCase() === normalized.english.toLowerCase()
+    && item.chinese.toLowerCase() === normalized.chinese.toLowerCase()
+  ));
+  if (duplicate) return;
+  const sameEnglish = entries.findIndex((item) => item.english.toLowerCase() === normalized.english.toLowerCase());
+  if (
+    sameEnglish >= 0
+    && entries[sameEnglish].chinese.toLowerCase() === entries[sameEnglish].english.toLowerCase()
+    && normalized.chinese
+    && normalized.chinese.toLowerCase() !== normalized.english.toLowerCase()
+  ) {
+    entries[sameEnglish] = normalized;
+    return;
+  }
+  entries.push(normalized);
+}
+
+function extractAcronymTerminology(content) {
+  const entries = [];
+  const text = stripTerminologyLatex(content);
+  const pattern = /([^()（）\n]{1,140})[（(]\s*([A-Za-z][A-Za-z0-9-]{1,12})\s*[)）]/gu;
+  for (const match of text.matchAll(pattern)) {
+    const acronym = match[2].trim();
+    if (!isLikelyAcronym(acronym)) continue;
+    const fullTerm = inferAcronymFullTerm(match[1], acronym);
+    if (!fullTerm) continue;
+    addTerminologyEntry(entries, hasCjk(fullTerm)
+      ? { english: acronym, chinese: fullTerm, note: "from abbreviation definition" }
+      : { english: acronym, chinese: acronym, keepEnglish: true, note: `abbreviation for ${fullTerm}` });
+  }
+  return entries;
+}
+
+function latexTableBlocks(content) {
+  const blocks = [];
+  const pattern = /\\begin\s*\{(table\*?|tabular\*?|tabularx|longtable)\}[\s\S]*?\\end\s*\{\1\}/g;
+  for (const match of String(content || "").matchAll(pattern)) blocks.push(match[0]);
+  return blocks;
+}
+
+function splitLatexTableRow(row) {
+  return row
+    .split(/(?<!\\)&/g)
+    .map(normalizeTerminologyTerm)
+    .filter(Boolean);
+}
+
+function extractTerminologyFromTables(content) {
+  const entries = [];
+  for (const block of latexTableBlocks(content)) {
+    const cleanBlock = stripTerminologyLatex(block);
+    const termish = TERMINOLOGY_TABLE_HINT.test(cleanBlock);
+    const rows = block
+      .replace(/\\(?:toprule|midrule|bottomrule|hline|cline\s*\{[^{}]*\})/g, "")
+      .split(/\\\\(?:\s*\[[^\]]*\])?/g);
+    for (const row of rows) {
+      const cells = splitLatexTableRow(row);
+      if (cells.length < 2) continue;
+      if (cells.every((cell) => TERMINOLOGY_HEADER.test(cell))) continue;
+      const chinese = cells.find(isLikelyChineseTerm);
+      const english = cells.find((cell) => isLikelyEnglishTerm(cell) || isLikelyAcronym(cell));
+      if (chinese && english) {
+        addTerminologyEntry(entries, { chinese, english, note: termish ? "from terminology table" : "from table pair" });
+        continue;
+      }
+      if (!termish) continue;
+      const acronym = cells.find(isLikelyAcronym);
+      const fullTerm = cells.find((cell) => cell !== acronym && isLikelyEnglishTerm(cell));
+      if (acronym) {
+        addTerminologyEntry(entries, {
+          english: acronym,
+          chinese: acronym,
+          keepEnglish: true,
+          note: fullTerm ? `abbreviation for ${fullTerm}` : "from terminology table"
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+function extractTerminologyEntries(document) {
+  const entries = [];
+  for (const entry of extractAcronymTerminology(document.content)) addTerminologyEntry(entries, entry);
+  for (const entry of extractTerminologyFromTables(document.content)) addTerminologyEntry(entries, entry);
+  return entries.slice(0, 48);
 }
 
 async function loadTerminologyForFile(file) {
@@ -1057,38 +1278,13 @@ async function buildTerminologyForFile(file, force = false) {
   if (!force && cached?.sourceHash === signature) {
     return { ...cached, cached: true };
   }
-  const paragraphs = document.segments.map((segment) => ({
-    id: segment.id,
-    text: segment.english
-  }));
-  const hints = terminologyTableHints(document.content);
-  const raw = await callProvider(config.translation, {
-    system: [
-      "You build a compact bilingual terminology glossary for academic paper translation.",
-      "Extract stable technical terms, acronyms, named systems, metrics, protocol names, and explicit term mappings from text or tables.",
-      "Exclude generic academic words, articles, prepositions, and ordinary verbs.",
-      "Use the English term exactly as it should appear in the submitted paper.",
-      "Use the Chinese term as the author-facing draft term. If the Chinese draft should keep the English term unchanged, set keepEnglish true.",
-      "Return JSON only."
-    ].join(" "),
-    user: [
-      "Return this JSON shape:",
-      '{"terms":[{"english":"beacon","chinese":"信标","keepEnglish":false,"note":"optional"}]}',
-      "Limit to the most useful 48 terms.",
-      hints ? `Possible terminology table snippets:\n${hints}` : "Possible terminology table snippets:\n(none)",
-      `Editable manuscript paragraphs:\n${JSON.stringify(paragraphs).slice(0, 32_000)}`
-    ].join("\n\n"),
-    json: true,
-    temperature: 0.05,
-    maxTokens: 8192
-  });
-  const parsed = parseJsonResponse(raw);
-  const entries = normalizeTerminologyEntries(parsed.terms);
+  const entries = extractTerminologyEntries(document);
   const terminology = {
     file,
     sourceHash: signature,
     entries,
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    ruleBased: true
   };
   await updateState((nextState) => {
     nextState.terminology ||= {};
@@ -1113,10 +1309,7 @@ function validateTranslationOutput(segment, chinese, output) {
   if (analysis.unexpectedCommands.some((command) => !isSoftLatexCommandSignature(command))) {
     issues.push(`新增了 LaTeX 命令：${analysis.unexpectedCommands.join(", ")}`);
   }
-  const requiredCommands = new Set([
-    ...extractLatexCommandSignatures(segment.english).filter((command) => !isOptionalTranslationCommand(command)),
-    ...extractLatexCommandSignatures(chinese)
-  ]);
+  const requiredCommands = new Set(extractLatexCommandSignatures(chinese));
   const outputCommands = new Set(extractLatexCommandSignatures(prepared));
   const missingCommands = [...requiredCommands].filter((command) => !outputCommands.has(command));
   if (missingCommands.length) issues.push(`删除了原有 LaTeX 命令：${missingCommands.join(", ")}`);
@@ -1132,10 +1325,7 @@ function validateTranslationOutput(segment, chinese, output) {
     && words.length % 2 === 0
     && words.slice(0, words.length / 2).join(" ") === words.slice(words.length / 2).join(" ")
   ) issues.push("返回内容重复了同一段文字");
-  const chineseProtectedTokens = new Set(extractProtectedTokens(chinese));
-  const missingTokens = findMissingProtectedTokens(segment.english, chinese, prepared, {
-    allowSoftEnglishRemovals: true
-  }).filter((token) => chineseProtectedTokens.has(token) || !isOptionalTranslationToken(token));
+  const missingTokens = findMissingRequiredDraftTokens(chinese, prepared);
   if (missingTokens.length) issues.push(`遗漏了原有 LaTeX 标记：${missingTokens.join(", ")}`);
   const allowedTokens = new Set([
     ...extractProtectedTokens(segment.english),
@@ -1147,22 +1337,63 @@ function validateTranslationOutput(segment, chinese, output) {
   return { prepared, issues, analysis, missingCommands, missingTokens, unexpectedTokens };
 }
 
-function newParagraphPrompt(chinese, previous, next, terminology = "") {
+function containsCjk(value) {
+  return /[\u3400-\u9fff\uf900-\ufaff]/.test(String(value || ""));
+}
+
+function validateNewParagraphOutput(sourceDraft, output, file = "document.tex") {
+  const prepared = String(output || "").trim();
+  const issues = [];
+  if (!prepared) issues.push("返回内容为空");
+  if (containsCjk(prepared)) issues.push("返回内容仍包含中文，请输出英文正文段落");
+
+  const blocks = prepared.split(/\r?\n\s*\r?\n/).map((block) => block.trim()).filter(Boolean);
+  if (blocks.length !== 1) issues.push(`返回了 ${blocks.length} 个段落，而不是一个新增正文段落`);
+  if (blocks.length > 1) {
+    const normalized = blocks.map((block) => block.replace(/\s+/g, " ").trim());
+    if (new Set(normalized).size < normalized.length) issues.push("返回内容包含重复段落");
+  }
+
+  const parsed = parseSegments(prepared, file);
+  if (parsed.segments.length !== 1 || parsed.segments[0].english !== prepared) {
+    issues.push("返回内容不是一个可编辑的 LaTeX 正文段落；不要返回标题、列表、多段文本或解释说明");
+  }
+
+  const sourceTokens = new Set(extractProtectedTokens(sourceDraft));
+  const missingTokens = findMissingProtectedTokens("", sourceDraft, prepared)
+    .filter((token) => sourceTokens.has(token) && !isOptionalTranslationToken(token));
+  if (missingTokens.length) issues.push(`遗漏了原有 LaTeX 标记：${missingTokens.join(", ")}`);
+
+  const allowedTokens = new Set(extractProtectedTokens(sourceDraft));
+  const unexpectedTokens = extractProtectedTokens(prepared)
+    .filter((token) => !allowedTokens.has(token) && !isSoftProtectedToken(token));
+  if (unexpectedTokens.length) issues.push(`新增或改变了 LaTeX 标记：${unexpectedTokens.join(", ")}`);
+
+  return { prepared, issues, missingTokens, unexpectedTokens };
+}
+
+function newParagraphPrompt(draft, previous, next, terminology = "", correction = "") {
+  const draftHasChinese = containsCjk(draft);
+  const draftLabel = draftHasChinese ? "New Chinese draft" : "New English draft";
   return {
     system: [
       "You are an academic paper translator and LaTeX editor.",
-      "Translate the new Chinese paragraph into one concise, publication-ready academic English paragraph.",
+      draftHasChinese
+        ? "Translate the new Chinese draft into one concise, publication-ready academic English paragraph."
+        : "Polish the new English draft into one concise, publication-ready academic English paragraph.",
       "Use neighboring paragraphs only for terminology, tense, and style consistency.",
       terminology ? "Follow the terminology glossary exactly: Chinese terms must map to the listed English terms, and listed English terms must not be replaced with synonyms." : "",
-      "Preserve every LaTeX command, citation, reference, inline formula, symbol, number, and factual claim in the Chinese text.",
+      "The final answer must be English. Do not leave Chinese text in the output.",
+      "Preserve every LaTeX command, citation, reference, inline formula, symbol, number, and factual claim in the draft unless it is only soft text styling or an optional citation/reference marker that the user is clearly revising.",
       "Do not add evidence, results, citations, headings, list markers, or claims.",
       "Do not output Markdown fences or commentary. Return only one complete LaTeX body paragraph."
     ].filter(Boolean).join(" "),
     user: [
       terminology ? `Terminology glossary:\n${terminology}` : "",
       `Previous English paragraph:\n${previous || "(none)"}`,
-      `New Chinese paragraph:\n${chinese}`,
-      `Next English paragraph:\n${next || "(none)"}`
+      `${draftLabel}:\n${draft}`,
+      `Next English paragraph:\n${next || "(none)"}`,
+      correction ? `Your previous response was rejected before writing because: ${correction}\nReturn a corrected English LaTeX body paragraph only.` : ""
     ].filter(Boolean).join("\n\n")
   };
 }
@@ -1236,24 +1467,42 @@ async function addParagraph(file, index, sourceHash, chinese, position, approval
   const normalizedPosition = position === "before" ? "before" : "after";
   const neighborIndex = normalizedPosition === "before" ? anchor.index - 1 : anchor.index + 1;
   const key = approvalKey(["add", file, anchor.index, anchor.sourceHash, preparedChinese, normalizedPosition]);
-  let nextEnglish;
-  if (approvalToken) {
-    nextEnglish = consumeAiApproval(approvalToken, key);
+  let validation;
+  if (!approvalToken && !containsCjk(preparedChinese)) {
+    validation = validateNewParagraphOutput(preparedChinese, preparedChinese, file);
+  } else if (approvalToken) {
+    validation = validateNewParagraphOutput(preparedChinese, consumeAiApproval(approvalToken, key), file);
   } else {
-    const prompt = newParagraphPrompt(
-      preparedChinese,
-      normalizedPosition === "before" ? document.segments[neighborIndex]?.english : anchor.english,
-      normalizedPosition === "before" ? anchor.english : document.segments[neighborIndex]?.english,
-      terminologyText((await loadTerminologyForFile(file))?.entries)
-    );
-    const raw = await callProvider(config.translation, { ...prompt, temperature: 0.15, maxTokens: 4096 });
-    nextEnglish = inspectAiLatexOutput([preparedChinese], cleanModelText(raw), key);
+    const previous = normalizedPosition === "before" ? document.segments[neighborIndex]?.english : anchor.english;
+    const next = normalizedPosition === "before" ? anchor.english : document.segments[neighborIndex]?.english;
+    const terminology = terminologyText((await loadTerminologyForFile(file))?.entries);
+    let correction = "";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const prompt = newParagraphPrompt(preparedChinese, previous, next, terminology, correction);
+      const raw = await callProvider(config.translation, {
+        ...prompt,
+        temperature: 0.15,
+        maxTokens: 4096,
+        timeoutMs: 60_000,
+        maxAttempts: 1
+      });
+      const inspected = inspectAiLatexOutput([preparedChinese], cleanModelText(raw), key);
+      validation = validateNewParagraphOutput(preparedChinese, inspected, file);
+      if (!validation.issues.length) break;
+      correction = validation.issues.join("；");
+    }
   }
-  const missingTokens = findMissingProtectedTokens("", preparedChinese, nextEnglish);
-  if (missingTokens.length) {
-    const error = new Error("The AI response removed protected LaTeX tokens.");
-    error.code = "LATEX_TOKEN_LOSS";
-    error.details = { missingTokens };
+
+  if (validation.issues.length) {
+    const reason = validation.issues.slice(0, 3).join("；");
+    const error = new Error(`AI 没有返回可插入的英文 LaTeX 正文段落，TeX 文件未被修改。原因：${reason}`);
+    error.status = 422;
+    error.code = "INVALID_NEW_PARAGRAPH_OUTPUT";
+    error.details = {
+      issues: validation.issues,
+      missingTokens: validation.missingTokens,
+      unexpectedTokens: validation.unexpectedTokens
+    };
     throw error;
   }
 
@@ -1262,7 +1511,7 @@ async function addParagraph(file, index, sourceHash, chinese, position, approval
     file,
     anchor.index,
     anchor.sourceHash,
-    nextEnglish,
+    validation.prepared,
     normalizedPosition
   );
   await remapFileTranslations(file, document, inserted.document, {
@@ -1298,6 +1547,34 @@ async function commentParagraph(file, index, sourceHash, chinese, selectionStart
     chinese: String(chinese ?? segment.chinese ?? "")
   } : null);
   return { document: await getDocumentPayload(file), build: await maybeCompile({ fast: true }) };
+}
+
+async function saveMathBlock(file, blockId, sourceHash, startLine, source, deferCompile = true) {
+  return queueFileTranslation(file, async () => {
+    await assertDocumentFile(file);
+    if (typeof source !== "string") throw new Error("Formula TeX source is required.");
+    if (source.includes("\0")) throw new Error("Formula TeX source cannot contain null characters.");
+    const nextSource = source.trim();
+    if (!nextSource) throw new Error("Formula TeX source cannot be empty.");
+    const document = await readDocument(config.projectRoot, file);
+    const block = getMathBlock(document, blockId, sourceHash, startLine);
+    const nextLines = [...document.lines];
+    nextLines.splice(block.startLine - 1, block.endLine - block.startLine + 1, ...nextSource.split(/\r?\n/));
+    await writeSourceFile(
+      config.projectRoot,
+      config.mainTex,
+      file,
+      nextLines.join(document.eol),
+      hashText(document.content)
+    );
+    await updateState((state) => {
+      state.review = null;
+    });
+    return {
+      document: await getDocumentPayload(file),
+      build: deferCompile ? null : await maybeCompile({ fast: true })
+    };
+  });
 }
 
 async function translateFileToChinese(file, segmentIds = [], sectionId = "", force = false) {
@@ -1459,6 +1736,7 @@ const app = express();
 app.use(express.json({ limit: "12mb" }));
 app.use("/vendor/lucide", express.static(path.join(APP_ROOT, "node_modules", "lucide", "dist", "umd")));
 app.use("/vendor/pdfjs", express.static(path.join(APP_ROOT, "node_modules", "pdfjs-dist", "build")));
+app.use("/vendor/katex", express.static(path.join(APP_ROOT, "node_modules", "katex", "dist")));
 app.get("/favicon.ico", (_req, res) => res.status(204).end());
 app.use(express.static(path.join(APP_ROOT, "public")));
 
@@ -1519,7 +1797,7 @@ app.post("/api/setup", route(async (req, res) => {
     ...config,
     projectRoot: project.projectRoot,
     mainTex: String(incoming.mainTex || project.mainTex),
-    autoCompile: incoming.autoCompile !== false,
+    autoCompile: incoming.autoCompile === undefined ? config.autoCompile === true : incoming.autoCompile === true,
     overleafToken: source.mode === "overleaf" ? overleafToken : config.overleafToken,
     gitUsername: source.mode === "git" || source.connectGit === true ? gitUsername : config.gitUsername,
     gitToken: source.mode === "git" || source.connectGit === true ? gitToken : config.gitToken,
@@ -1604,7 +1882,18 @@ app.post("/api/source", route(async (req, res) => {
   await updateState((state) => {
     state.review = null;
   });
-  res.json({ source, build: await maybeCompile() });
+  res.json({ source, build: req.body.deferCompile === true ? null : await maybeCompile() });
+}));
+
+app.post("/api/math-block", route(async (req, res) => {
+  res.json(await saveMathBlock(
+    String(req.body.file || ""),
+    String(req.body.id || ""),
+    String(req.body.sourceHash || ""),
+    req.body.startLine,
+    req.body.source,
+    req.body.deferCompile !== false
+  ));
 }));
 
 app.post("/api/project/open", route(async (req, res) => {
@@ -1637,7 +1926,7 @@ app.post("/api/config", route(async (req, res) => {
   });
   config = {
     ...config,
-    autoCompile: incoming.autoCompile !== false,
+    autoCompile: incoming.autoCompile === true,
     overleafToken: incoming.overleafToken ? String(incoming.overleafToken).trim() : config.overleafToken,
     gitUsername: incoming.gitUsername === undefined ? config.gitUsername : String(incoming.gitUsername || "").trim(),
     gitToken: incoming.gitToken ? String(incoming.gitToken).trim() : config.gitToken,
@@ -1723,7 +2012,10 @@ app.post("/api/segment/english", route(async (req, res) => {
   if (req.body.chinese) {
     await storeChinese({ ...nextSegment, file: req.body.file }, req.body.chinese, nextSegment.sourceHash, false);
   }
-  res.json({ document: await getDocumentPayload(req.body.file), build: await maybeCompile() });
+  res.json({
+    document: await getDocumentPayload(req.body.file),
+    build: req.body.deferCompile === true ? null : await maybeCompile()
+  });
 }));
 
 app.get("/api/file/terminology", route(async (req, res) => {

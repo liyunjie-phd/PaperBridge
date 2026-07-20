@@ -64,10 +64,11 @@ test("TeX source API saves atomically, rejects stale edits, and retains three ba
     result = await post("/api/source", {
       file: "section.tex",
       content: "First PaperBridge edit.\n",
-      sourceHash: originalHash
+      sourceHash: originalHash,
+      deferCompile: true
     });
     assert.equal(result.response.ok, true, result.payload.error);
-    assert.equal(result.payload.build.skipped, true);
+    assert.equal(result.payload.build, null);
     assert.equal(await fs.readFile(path.join(projectRoot, "section.tex"), "utf8"), "First PaperBridge edit.\n");
 
     const stale = await post("/api/source", {

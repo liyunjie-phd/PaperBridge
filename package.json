@@ -1,6 +1,6 @@
 {
   "name": "paper-bridge",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Local bilingual LaTeX editor with AI translation and Overleaf synchronization",
@@ -12,12 +12,14 @@
     "desktop": "electron .",
     "test": "node --test",
     "build:dir": "electron-builder --dir --win --x64",
-    "build:setup": "electron-builder --win nsis --x64"
+    "build:setup": "electron-builder --win nsis --x64",
+    "build:setup:slim": "electron-builder --config build/electron-builder.slim.cjs --win nsis --x64"
   },
   "dependencies": {
     "dugite": "^3.2.2",
     "express": "^5.2.1",
     "extract-zip": "^2.0.1",
+    "katex": "^0.16.9",
     "lucide": "^1.24.0",
     "pdfjs-dist": "^6.1.200",
     "word-extractor": "^1.0.4"

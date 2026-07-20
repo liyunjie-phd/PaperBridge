@@ -118,10 +118,11 @@ test("paragraph translation blocks dangerous commands and never writes formattin
   }
 });
 
-test("paragraph translation allows soft formatting, numeric math, citations, and refs to change", async () => {
+test("paragraph translation follows the Chinese draft when refs are removed or added", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-soft-translation-"));
   const projectRoot = path.join(root, "project");
   let providerServer;
+  let providerOutput = "The revised paragraph reports 35 percent improvement with \\textbf{clear} wording and enough academic words for publication.";
   try {
     await fs.mkdir(projectRoot);
     await fs.writeFile(
@@ -130,6 +131,8 @@ test("paragraph translation allows soft formatting, numeric math, citations, and
         "\\documentclass{article}",
         "\\begin{document}",
         "The original paragraph reports $35\\%$ improvement with \\emph{academic} wording in Fig.~\\ref{system} and prior work~\\cite{cedar}.",
+        "",
+        "The second original paragraph contains enough academic words and no figure reference.",
         "\\end{document}"
       ].join("\n"),
       "utf8"
@@ -142,7 +145,7 @@ test("paragraph translation allows soft formatting, numeric math, citations, and
       response.end(JSON.stringify({
         choices: [{
           message: {
-            content: "The revised paragraph reports 35 percent improvement with \\textbf{clear} wording and enough academic words for publication."
+            content: providerOutput
           }
         }]
       }));
@@ -187,6 +190,17 @@ test("paragraph translation allows soft formatting, numeric math, citations, and
     assert.equal(result.response.ok, true, JSON.stringify(result.payload));
     assert.match(result.payload.document.segments[0].english, /\\textbf\{clear\}/);
     assert.doesNotMatch(result.payload.document.segments[0].english, /\\cite|\\ref|\$35/);
+
+    const secondSegment = result.payload.document.segments[1];
+    providerOutput = "As shown in Fig.~\\ref{added}, the revised second paragraph contains enough academic words for publication.";
+    result = await request("/api/segment/translate", {
+      file: "main.tex",
+      index: secondSegment.index,
+      sourceHash: secondSegment.sourceHash,
+      chinese: "As shown in Fig.~\\ref{added}, update this paragraph in academic English."
+    });
+    assert.equal(result.response.ok, true, JSON.stringify(result.payload));
+    assert.match(result.payload.document.segments[1].english, /\\ref\{added\}/);
   } finally {
     await stopServer();
     if (providerServer) await new Promise((resolve) => providerServer.close(resolve));

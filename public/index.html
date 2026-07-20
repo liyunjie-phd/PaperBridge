@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PaperBridge</title>
+  <link rel="stylesheet" href="/vendor/katex/katex.min.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -24,8 +25,8 @@
       <button class="button secondary" id="pullButton" title="从远端 Git 仓库拉取最新版本">
         <i data-lucide="download"></i><span>拉取</span>
       </button>
-      <button class="button secondary" id="compileButton" title="编译英文 LaTeX">
-        <i data-lucide="hammer"></i><span>编译</span>
+      <button class="button secondary" id="compileButton" title="一键编译全文并刷新 PDF">
+        <i data-lucide="hammer"></i><span>编译全文</span>
       </button>
       <button class="button primary" id="pushButton" title="编译、提交并推送至远端 Git 仓库">
         <i data-lucide="upload"></i><span>推送</span>
@@ -121,8 +122,8 @@
           <button class="button secondary" id="modularizeButton" type="button">
             <i data-lucide="files"></i><span>按章节拆分</span>
           </button>
-          <button class="button primary" id="saveSourceButton" type="button" disabled>
-            <i data-lucide="save"></i><span>保存</span>
+          <button class="button primary" id="saveSourceButton" type="button" title="保存到当前 TeX / Bib 文件" disabled>
+            <i data-lucide="save"></i><span>保存 TeX</span>
           </button>
         </div>
       </div>
@@ -216,6 +217,10 @@
           <div class="page-status" id="pageStatus">PDF 未加载</div>
         </div>
         <div class="preview-actions">
+          <span class="preview-mode-pill" id="previewModeLabel">快速预览</span>
+          <button class="button primary preview-compile-button" id="previewCompileButton" title="正式编译全文并刷新 PDF">
+            <i data-lucide="hammer"></i><span>编译全文</span>
+          </button>
           <div class="page-navigation" aria-label="PDF page navigation">
             <button class="icon-button small" id="previousPageButton" title="上一页"><i data-lucide="chevron-left"></i></button>
             <span id="visiblePage">1</span>
@@ -408,7 +413,7 @@
       <section class="setup-section compact">
         <div class="setup-section-heading"><span class="setup-step" id="setupTypesetStep">4</span><strong>排版设置</strong></div>
         <div class="setup-options-row">
-          <label class="toggle-row setup-toggle"><input id="setupAutoCompile" type="checkbox" checked><span>英文更新后自动编译</span></label>
+          <label class="toggle-row setup-toggle"><input id="setupAutoCompile" type="checkbox"><span>保存英文或 TeX 后自动编译（可选）</span></label>
           <div class="dependency-status" id="dependencyStatus"></div>
         </div>
       </section>
@@ -436,15 +441,15 @@
           <input id="terminologySearch" type="search" autocomplete="off" placeholder="搜索中文、英文或备注">
         </label>
         <button class="button secondary" id="regenerateTerminologyButton" type="button">
-          <i data-lucide="sparkles"></i><span>AI 生成/刷新</span>
+          <i data-lucide="sparkles"></i><span>从论文提取/刷新</span>
         </button>
         <button class="button secondary" id="addTerminologyButton" type="button">
           <i data-lucide="plus"></i><span>新增术语</span>
         </button>
       </div>
-      <div class="terminology-help">这里的术语会优先用于全文翻译和单段改写。手动保存后，普通翻译不会自动覆盖它。</div>
+      <div class="terminology-help">这里的术语会优先用于全文翻译和单段改写。系统只从明确缩写定义和术语表格中提取，不再让 AI 自动猜测。</div>
       <div class="terminology-list" id="terminologyList"></div>
-      <div class="terminology-empty hidden" id="terminologyEmpty">暂无术语。可以手动新增，或使用 AI 生成一份初始术语表。</div>
+      <div class="terminology-empty hidden" id="terminologyEmpty">暂无术语。可以手动新增，或从论文中的缩写定义和术语表格提取。</div>
     </div>
     <div class="dialog-actions terminology-actions">
       <span class="terminology-status" id="terminologyStatus"></span>
@@ -470,8 +475,8 @@
           <label><input type="radio" name="newParagraphPosition" value="before"><span>当前段落之前</span></label>
         </div>
         <label class="field">
-          <span>中文工作稿</span>
-          <textarea class="paragraph-textarea" id="newParagraphChinese" lang="zh-CN" placeholder="输入需要新增的完整中文段落"></textarea>
+          <span>中文/英文工作稿</span>
+          <textarea class="paragraph-textarea" id="newParagraphChinese" lang="zh-CN" placeholder="输入需要新增的完整中文或英文段落"></textarea>
         </label>
       </div>
       <div class="dialog-actions">
@@ -636,7 +641,7 @@
 
       <label class="toggle-row">
         <input id="autoCompileInput" type="checkbox">
-        <span>英文更新后自动编译</span>
+        <span>保存英文或 TeX 后自动编译（可选）</span>
       </label>
 
       <div class="dialog-actions">
@@ -655,6 +660,7 @@
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/lucide/lucide.min.js"></script>
+  <script src="/vendor/katex/katex.min.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

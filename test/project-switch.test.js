@@ -29,6 +29,7 @@ test("switching projects preserves saved AI and Overleaf credentials", async () 
       overleafToken: "saved-overleaf-token",
       gitUsername: "saved-git-user",
       gitToken: "saved-git-token",
+      autoCompile: true,
       translation: { model: "deepseek-v4-flash", apiKey: "translation-key" },
       review: { model: "deepseek-v4-pro", apiKey: "review-key" }
     });
@@ -36,15 +37,13 @@ test("switching projects preserves saved AI and Overleaf credentials", async () 
 
     response = await request("/api/setup", {
       source: { mode: "local", localPath: firstProject },
-      preserveProviders: true,
-      autoCompile: true
+      preserveProviders: true
     });
     assert.equal(response.ok, true);
 
     response = await request("/api/setup", {
       source: { mode: "local", localPath: secondProject },
-      preserveProviders: true,
-      autoCompile: true
+      preserveProviders: true
     });
     assert.equal(response.ok, true);
     const project = await response.json();
@@ -53,6 +52,7 @@ test("switching projects preserves saved AI and Overleaf credentials", async () 
     assert.equal(project.config.hasOverleafToken, true);
     assert.equal(project.config.gitUsername, "saved-git-user");
     assert.equal(project.config.hasGitToken, true);
+    assert.equal(project.config.autoCompile, true);
     assert.equal(project.config.translation.model, "deepseek-v4-flash");
     assert.equal(project.config.translation.hasApiKey, true);
     assert.equal(project.config.review.model, "deepseek-v4-pro");

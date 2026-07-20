@@ -506,6 +506,44 @@ textarea:focus-visible {
   min-width: 0;
 }
 
+.source-search {
+  height: 34px;
+  min-width: 230px;
+  flex: 1 1 260px;
+  max-width: 340px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 5px 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.source-search:focus-within {
+  border-color: #3b82c4;
+  box-shadow: 0 0 0 2px rgba(59, 130, 196, 0.15);
+}
+
+.source-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.source-search span {
+  min-width: 42px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
 .source-file-select {
   width: min(300px, 24vw);
   min-width: 150px;
@@ -569,10 +607,22 @@ textarea:focus-visible {
   padding: 14px 18px;
   border: 0;
   border-radius: 0;
-  outline-offset: -2px;
+  outline: 0;
   background: var(--surface);
+  caret-color: var(--blue);
   color: #252b30;
+  cursor: text;
   white-space: pre;
+}
+
+.source-editor:focus {
+  background: #fbfdff;
+  box-shadow: inset 0 0 0 2px #3b82c4;
+}
+
+.source-editor::selection {
+  background: #bfdbfe;
+  color: #111827;
 }
 
 .font-size-control {
@@ -731,7 +781,8 @@ body.workspace-split-dragging * {
   padding: 12px 14px 28px;
 }
 
-.segment-row {
+.segment-row,
+.math-row {
   margin-bottom: 10px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -786,12 +837,14 @@ body.workspace-split-dragging * {
   font-family: "Cascadia Code", Consolas, monospace;
 }
 
-.segment-row:focus-within {
+.segment-row:focus-within,
+.math-row:focus-within {
   border-color: #8ba9bd;
   box-shadow: 0 0 0 2px rgba(59, 130, 196, 0.08);
 }
 
-.segment-row.pdf-located {
+.segment-row.pdf-located,
+.math-row.pdf-located {
   border-color: #2f7e63;
   animation: pdf-located-pulse 1.8s ease-out;
 }
@@ -907,6 +960,42 @@ body.workspace-split-dragging * {
   background: #fffcf2;
 }
 
+.math-header {
+  background: #fbfcff;
+}
+
+.math-editor {
+  padding: 10px 12px 12px;
+  background: #fbfcff;
+}
+
+.math-source-editor {
+  width: 100%;
+  min-height: 128px;
+  max-height: 420px;
+  overflow-y: auto;
+  resize: vertical;
+  padding: 12px 13px;
+  border: 1px solid #d9e2ea;
+  border-radius: 6px;
+  outline: 0;
+  background: #fff;
+  color: #1f2933;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.58;
+  tab-size: 2;
+}
+
+.math-source-editor:focus {
+  border-color: #8ba9bd;
+  box-shadow: 0 0 0 2px rgba(59, 130, 196, 0.08);
+}
+
+.math-source-editor.changed {
+  background: #fffcf2;
+}
+
 .mini-button {
   width: 28px;
   height: 26px;
@@ -1012,6 +1101,45 @@ body.workspace-split-dragging * {
   gap: 5px;
 }
 
+.preview-mode-pill {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid #b7d7ca;
+  border-radius: 999px;
+  background: #ecf8f3;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.preview-panel[data-preview-mode="pdf"] .preview-mode-pill {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.preview-compile-button {
+  height: 30px;
+  padding: 0 10px;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.preview-compile-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.preview-panel[data-preview-mode="fast"] .page-navigation,
+.preview-panel[data-preview-mode="fast"] .pdf-zoom-control,
+.preview-panel[data-preview-mode="fast"] #exportPdfButton,
+.preview-panel[data-preview-mode="fast"] #openPdfButton {
+  display: none;
+}
+
 .pdf-zoom-control {
   height: 28px;
   display: flex;
@@ -1071,6 +1199,137 @@ body.workspace-split-dragging * {
 
 .pdf-scroll.locating {
   cursor: progress;
+}
+
+.fast-preview-document {
+  width: min(820px, 100%);
+  margin: 0 auto 24px;
+  padding: 34px 42px 46px;
+  background: white;
+  box-shadow: 0 2px 10px rgba(25, 33, 38, 0.16);
+  color: #111827;
+  cursor: text;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 15px;
+  line-height: 1.58;
+}
+
+.fast-preview-meta {
+  margin-bottom: 18px;
+  color: #6b7280;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+}
+
+.fast-preview-block {
+  margin: 0 0 0.72em;
+  padding: 2px 0;
+  border-radius: 4px;
+}
+
+.fast-preview-block:hover,
+.fast-preview-block.source-highlight {
+  background: #f0fdf4;
+  box-shadow: 0 0 0 3px #f0fdf4;
+}
+
+.fast-preview-block h1,
+.fast-preview-block h2,
+.fast-preview-block h3,
+.fast-preview-block h4 {
+  margin: 1.25em 0 0.45em;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.25;
+}
+
+.fast-preview-block h1 {
+  font-size: 22px;
+}
+
+.fast-preview-block h2 {
+  font-size: 19px;
+}
+
+.fast-preview-block h3 {
+  font-size: 16px;
+}
+
+.fast-preview-block figure,
+.fast-preview-env {
+  margin: 1em 0;
+  padding: 10px 12px;
+  border: 1px solid #dbe5df;
+  border-radius: 6px;
+  background: #f8fbf9;
+  color: #4b5563;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+}
+
+.fast-preview-command {
+  color: #6b7280;
+}
+
+.math-pending,
+.math-rendered {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-family: "Cambria Math", "Times New Roman", serif;
+  overflow-wrap: anywhere;
+}
+
+.math-rendered:not(.math-fallback) {
+  padding: 0 2px;
+  background: transparent;
+  color: inherit;
+}
+
+.math-pending.display,
+.math-rendered.display {
+  display: block;
+  margin: 0.6em 0;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.math-rendered.display:not(.math-fallback) {
+  overflow-x: auto;
+}
+
+.math-fallback {
+  display: inline-flex;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid #f4c56a;
+  border-radius: 6px;
+  background: #fff8e7;
+  color: #7c4a03;
+  text-align: left;
+}
+
+.math-fallback.display {
+  display: flex;
+}
+
+.math-fallback-label {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.math-source {
+  max-width: 100%;
+  color: #5f3b00;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre-wrap;
 }
 
 .pdf-page-shell {
