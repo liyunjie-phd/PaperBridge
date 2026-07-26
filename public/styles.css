@@ -290,6 +290,16 @@ textarea:focus-visible {
   flex-direction: column;
 }
 
+.project-sidebar-section {
+  flex: 0 0 auto;
+  max-height: 190px;
+  border-bottom: 1px solid var(--border);
+}
+
+.document-sidebar-section {
+  flex: 1 1 auto;
+}
+
 .sidebar-heading {
   display: flex;
   align-items: center;
@@ -322,6 +332,65 @@ textarea:focus-visible {
   min-height: 0;
   overflow-y: auto;
   padding: 0 7px 12px;
+}
+
+.project-switch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 136px;
+  overflow-y: auto;
+  padding: 0 7px 10px;
+}
+
+.project-switch-button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #343a3f;
+  cursor: pointer;
+  text-align: left;
+}
+
+.project-switch-button:hover {
+  background: #edf0f2;
+}
+
+.project-switch-button.active {
+  background: var(--blue-soft);
+  color: var(--blue);
+  cursor: default;
+}
+
+.project-switch-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.project-switch-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-switch-meta,
+.project-switch-empty {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.project-switch-empty {
+  padding: 0 8px 10px;
 }
 
 .document-button {
@@ -612,7 +681,8 @@ textarea:focus-visible {
   caret-color: var(--blue);
   color: #252b30;
   cursor: text;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .source-editor:focus {
@@ -782,7 +852,8 @@ body.workspace-split-dragging * {
 }
 
 .segment-row,
-.math-row {
+.math-row,
+.table-row {
   margin-bottom: 10px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -838,15 +909,29 @@ body.workspace-split-dragging * {
 }
 
 .segment-row:focus-within,
-.math-row:focus-within {
+.math-row:focus-within,
+.table-row:focus-within {
   border-color: #8ba9bd;
   box-shadow: 0 0 0 2px rgba(59, 130, 196, 0.08);
 }
 
 .segment-row.pdf-located,
-.math-row.pdf-located {
+.math-row.pdf-located,
+.table-row.pdf-located {
   border-color: #2f7e63;
   animation: pdf-located-pulse 1.8s ease-out;
+}
+
+.math-row.dragging {
+  opacity: 0.62;
+}
+
+.math-drop-before {
+  box-shadow: inset 0 3px 0 #2f7e63;
+}
+
+.math-drop-after {
+  box-shadow: inset 0 -3px 0 #2f7e63;
 }
 
 .segment-header {
@@ -964,6 +1049,10 @@ body.workspace-split-dragging * {
   background: #fbfcff;
 }
 
+.table-header {
+  background: #fffdfa;
+}
+
 .math-editor {
   padding: 10px 12px 12px;
   background: #fbfcff;
@@ -994,6 +1083,69 @@ body.workspace-split-dragging * {
 
 .math-source-editor.changed {
   background: #fffcf2;
+}
+
+.table-editor {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  background: #fffdfa;
+}
+
+.table-editor-label {
+  color: #5f676d;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.table-editor-scroll {
+  overflow-x: auto;
+  border: 1px solid #e0e4e7;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.editable-paper-table {
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.editable-paper-table td {
+  min-width: 120px;
+  border: 1px solid #e2e7ea;
+  padding: 0;
+  vertical-align: top;
+}
+
+.editable-paper-table textarea {
+  width: 100%;
+  min-height: 34px;
+  overflow: hidden;
+  resize: none;
+  padding: 7px 8px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #242b30;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.editable-paper-table.english textarea {
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+.editable-paper-table textarea:focus {
+  background: #f3f8ff;
+}
+
+.math-drag-handle {
+  cursor: grab;
+}
+
+.math-drag-handle:active {
+  cursor: grabbing;
 }
 
 .mini-button {
@@ -1894,6 +2046,7 @@ body.workspace-split-dragging * {
 .main-tex-dialog,
 .terminology-dialog,
 .paragraph-dialog,
+.figure-dialog,
 .git-push-dialog,
 .structure-dialog,
 .format-preflight-dialog {
@@ -1913,6 +2066,10 @@ body.workspace-split-dragging * {
 
 .paragraph-dialog {
   width: min(660px, calc(100vw - 36px));
+}
+
+.figure-dialog {
+  width: min(760px, calc(100vw - 36px));
 }
 
 .main-tex-dialog {
@@ -1936,6 +2093,7 @@ body.workspace-split-dragging * {
 .main-tex-dialog::backdrop,
 .terminology-dialog::backdrop,
 .paragraph-dialog::backdrop,
+.figure-dialog::backdrop,
 .git-push-dialog::backdrop,
 .structure-dialog::backdrop,
 .format-preflight-dialog::backdrop {
@@ -2072,6 +2230,54 @@ body.workspace-split-dragging * {
   line-height: 1.55;
 }
 
+.recent-project-list {
+  display: grid;
+  gap: 8px;
+}
+
+.recent-project-button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-project-button:hover {
+  border-color: var(--accent);
+  background: #eef6ff;
+}
+
+.recent-project-main {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-path {
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-meta {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .setup-inline-grid,
 .setup-provider-grid {
   display: grid;
@@ -2093,6 +2299,11 @@ body.workspace-split-dragging * {
 .path-input-row input {
   min-width: 0;
   flex: 1;
+}
+
+.migrate-storage-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .setup-options-row {
@@ -2290,6 +2501,17 @@ body.workspace-split-dragging * {
   display: grid;
   gap: 14px;
   padding: 16px;
+}
+
+.figure-dialog-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.figure-dialog-body textarea {
+  min-height: 90px;
+  resize: vertical;
 }
 
 .main-tex-body {

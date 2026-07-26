@@ -226,7 +226,7 @@ test("Chinese generation can be forced for already translated paragraphs", async
   }
 });
 
-test("concurrent adjacent paragraph English updates are serialized and stay distinct", async () => {
+test("concurrent adjacent paragraph translations call AI in parallel and write distinct TeX safely", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-adjacent-translate-"));
   const projectRoot = path.join(root, "project");
   let providerServer;
@@ -255,7 +255,7 @@ test("concurrent adjacent paragraph English updates are serialized and stay dist
         const payload = JSON.parse(body);
         const user = payload.messages.find((message) => message.role === "user")?.content || "";
         const isFirst = user.includes("第一段中文");
-        if (isFirst) await new Promise((resolve) => setTimeout(resolve, 80));
+        await new Promise((resolve) => setTimeout(resolve, 80));
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({
           choices: [{
@@ -317,7 +317,7 @@ test("concurrent adjacent paragraph English updates are serialized and stay dist
         deferCompile: true
       })
     ]);
-    assert.equal(maxActive, 1);
+    assert.equal(maxActive, 2);
     const result = await request("/api/document?file=main.tex");
     assert.match(result.segments[0].english, /first translated paragraph/);
     assert.match(result.segments[1].english, /second translated paragraph/);

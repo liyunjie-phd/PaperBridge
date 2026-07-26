@@ -115,3 +115,88 @@ test("compile diagnosis sends targeted source context and caches identical error
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("compile diagnosis avoids no-op missing-dollar advice for bold math text", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-compile-dollar-"));
+  const projectRoot = path.join(root, "project");
+  let providerServer;
+  try {
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "main.tex"), [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\begin{tabular}{c}",
+      "& $\\textbf{1.73\\times}$",
+      "\\end{tabular}",
+      "\\end{document}"
+    ].join("\n"), "utf8");
+
+    providerServer = http.createServer(async (request, response) => {
+      for await (const _chunk of request) {
+        // Consume the request body.
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              summary: "Missing dollar after \\times.",
+              issues: [{
+                file: "main.tex",
+                line: 4,
+                explanation: "The line misses a closing dollar after \\times.",
+                suggestion: "Add the closing dollar after \\times.",
+                replacement: "& $\\textbf{1.73\\times}$"
+              }]
+            })
+          }
+        }]
+      }));
+    });
+    await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
+    const providerPort = providerServer.address().port;
+    const server = await startServer({
+      port: 0,
+      dataRoot: path.join(root, "data"),
+      projectsRoot: path.join(root, "projects")
+    });
+    const request = async (url, body) => {
+      const response = await fetch(`${server.url}${url}`, {
+        method: body ? "POST" : "GET",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const payload = await response.json();
+      assert.equal(response.ok, true, payload.error);
+      return payload;
+    };
+    const provider = {
+      type: "openai-compatible",
+      baseUrl: `http://127.0.0.1:${providerPort}`,
+      apiKey: "test-key",
+      model: "test-model",
+      jsonMode: true
+    };
+    await request("/api/setup", {
+      source: { mode: "local", localPath: projectRoot },
+      translation: provider,
+      review: provider,
+      autoCompile: false
+    });
+
+    const diagnosis = await request("/api/compile/diagnose", {
+      errors: ["Missing $ inserted."],
+      log: "main.tex:4: Missing $ inserted.\nl.4 & $\\textbf{1.73\\times}$"
+    });
+    const issue = diagnosis.issues[0];
+    assert.match(issue.explanation, /\\textbf/);
+    assert.match(issue.suggestion, /\\textbf\{1\.73\$\\times\$\}/);
+    assert.notEqual(issue.replacement, "& $\\textbf{1.73\\times}$");
+  } finally {
+    await stopServer();
+    if (providerServer) await new Promise((resolve) => providerServer.close(resolve));
+    const relative = path.relative(os.tmpdir(), root);
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

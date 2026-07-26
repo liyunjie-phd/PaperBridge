@@ -51,7 +51,7 @@ test("TeX source API saves atomically, rejects stale edits, and retains three ba
     assert.equal(result.response.ok, true, result.payload.error);
     assert.deepEqual(result.payload.texFiles, ["main.tex", "section.tex"]);
     assert.deepEqual(result.payload.bibliographyFiles, ["refs.bib"]);
-    assert.deepEqual(result.payload.sourceFiles, ["main.tex", "section.tex", "refs.bib"]);
+    assert.deepEqual(result.payload.sourceFiles, ["main.tex", "section.tex", "unused.tex", "refs.bib"]);
     assert.equal(result.payload.structure.mode, "modular");
     assert.deepEqual(result.payload.structure.workflow.local.files, ["section.tex"]);
 
@@ -69,6 +69,7 @@ test("TeX source API saves atomically, rejects stale edits, and retains three ba
     });
     assert.equal(result.response.ok, true, result.payload.error);
     assert.equal(result.payload.build, null);
+    assert.equal(result.payload.project, undefined);
     assert.equal(await fs.readFile(path.join(projectRoot, "section.tex"), "utf8"), "First PaperBridge edit.\n");
 
     const stale = await post("/api/source", {
@@ -105,8 +106,9 @@ test("TeX source API saves atomically, rejects stale edits, and retains three ba
     assert.equal(result.response.ok, true, result.payload.error);
     assert.match(await fs.readFile(path.join(projectRoot, "refs.bib"), "utf8"), /Updated reference/);
 
-    const outside = await request("/api/source?file=unused.tex");
-    assert.equal(outside.response.ok, false);
+    const unusedTex = await request("/api/source?file=unused.tex");
+    assert.equal(unusedTex.response.ok, true, unusedTex.payload.error);
+    assert.equal(unusedTex.payload.content, "Not part of the paper.\n");
     const unusedBib = await request("/api/source?file=unused.bib");
     assert.equal(unusedBib.response.ok, false);
     const escaped = await request("/api/source?file=..%2Foutside.tex");
@@ -117,4 +119,36 @@ test("TeX source API saves atomically, rejects stale edits, and retains three ba
     assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("TeX source editor soft-wraps long lines without adding a toggle", async () => {
+  const indexHtml = await fs.readFile(path.join(process.cwd(), "public", "index.html"), "utf8");
+  const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
+  assert.match(indexHtml, /id="sourceEditor"[\s\S]*wrap="soft"/);
+  assert.doesNotMatch(indexHtml, /sourceWrapButton/);
+  assert.match(styles, /\.source-editor\s*\{[\s\S]*white-space:\s*pre-wrap;/);
+  assert.match(styles, /\.source-editor\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
+});
+
+test("TeX source save avoids blocking on a full project refresh", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const serverJs = await fs.readFile(path.join(process.cwd(), "server.js"), "utf8");
+
+  assert.match(appJs, /scheduleProjectRefresh\(900\)/);
+  assert.doesNotMatch(serverJs, /document:\s*nextDocument[\s\S]{0,120}project:\s*await getProjectPayload\(\)/);
+});
+
+test("sidebar owns project switching and new TeX while source view follows the selected document", async () => {
+  const indexHtml = await fs.readFile(path.join(process.cwd(), "public", "index.html"), "utf8");
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
+
+  assert.match(indexHtml, /id="sidebarProjectList"/);
+  assert.match(indexHtml, /id="createTexFileButton"[\s\S]*id="documentList"/);
+  assert.doesNotMatch(indexHtml, /source-file-select[\s\S]{0,260}id="createTexFileButton"/);
+  assert.match(appJs, /function renderSidebarProjectList/);
+  assert.match(appJs, /renderSourceFileOptions\(file\)/);
+  assert.match(appJs, /renderSourceFileOptions\(loadCurrent \? state\.currentFile : state\.sourceFile\)/);
+  assert.doesNotMatch(appJs, /insert-figure-button/);
+  assert.match(styles, /\.project-switch-button/);
 });

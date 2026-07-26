@@ -46,12 +46,22 @@
         <button class="mode-button" data-mode="format" role="tab">格式</button>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section project-sidebar-section">
         <div class="sidebar-heading">
-          <span>文档</span>
+          <span>项目</span>
+          <div class="sidebar-heading-actions">
+            <button class="icon-button small" id="addProjectButton" type="button" title="添加或切换论文"><i data-lucide="folder-plus"></i></button>
+          </div>
+        </div>
+        <nav class="project-switch-list" id="sidebarProjectList"></nav>
+      </div>
+
+      <div class="sidebar-section document-sidebar-section">
+        <div class="sidebar-heading">
+          <span>文件</span>
           <div class="sidebar-heading-actions">
             <span class="count" id="documentCount">0</span>
-            <button class="icon-button small" id="addProjectButton" type="button" title="添加或切换论文"><i data-lucide="folder-plus"></i></button>
+            <button class="icon-button small" id="createTexFileButton" type="button" title="新建 TeX 文件"><i data-lucide="file-plus-2"></i></button>
           </div>
         </div>
         <nav class="document-list" id="documentList"></nav>
@@ -119,6 +129,9 @@
         </div>
         <div class="toolbar-actions">
           <select class="source-file-select" id="sourceFileSelect" aria-label="选择 TeX 或 Bib 源文件"></select>
+          <button class="button secondary" id="insertFigureSourceButton" type="button">
+            <i data-lucide="image-plus"></i><span>插入图片</span>
+          </button>
           <button class="button secondary" id="modularizeButton" type="button">
             <i data-lucide="files"></i><span>按章节拆分</span>
           </button>
@@ -129,7 +142,7 @@
       </div>
       <div class="source-editor-shell">
         <pre class="source-line-numbers" id="sourceLineNumbers" aria-hidden="true">1</pre>
-        <textarea class="source-editor" id="sourceEditor" aria-label="TeX 或 Bib 源码编辑器" autocomplete="off" autocapitalize="off" spellcheck="false" wrap="off"></textarea>
+        <textarea class="source-editor" id="sourceEditor" aria-label="TeX 或 Bib 源码编辑器" autocomplete="off" autocapitalize="off" spellcheck="false" wrap="soft"></textarea>
       </div>
     </section>
 
@@ -286,6 +299,12 @@
           </div>
         </label>
         <div class="setup-note">配置、中文工作稿、备份和导入的论文项目将统一保存在这里。</div>
+      </section>
+
+      <section class="setup-section hidden" id="recentProjectsSection">
+        <div class="setup-section-heading"><span class="setup-step"><i data-lucide="history"></i></span><strong>最近项目</strong></div>
+        <div class="recent-project-list" id="recentProjectList"></div>
+        <div class="setup-note">添加新项目不会删除旧项目。这里会保留最近打开过的论文目录和主 TeX 文件。</div>
       </section>
 
       <section class="setup-section">
@@ -486,6 +505,43 @@
     </form>
   </dialog>
 
+  <dialog class="figure-dialog" id="figureDialog">
+    <form method="dialog" class="figure-form" id="figureForm">
+      <div class="dialog-header">
+        <div>
+          <h2>插入图片</h2>
+          <div class="file-meta" id="figureAnchorMeta">选择图片和排版位置</div>
+        </div>
+        <button class="icon-button" id="closeFigureButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="figure-dialog-body">
+        <label class="field wide">
+          <span>图片链接或路径</span>
+          <textarea id="figureImagesInput" rows="5" placeholder="每行一张图片，可以是 https 链接、本地绝对路径，或项目内相对路径"></textarea>
+        </label>
+        <label class="field wide">
+          <span>位置和排版要求</span>
+          <textarea id="figurePlacementInput" rows="3" placeholder="例如：插入第二页左列最上方，两张图片并排放；或：跨栏，放在本节顶部"></textarea>
+        </label>
+        <div class="settings-grid compact">
+          <label class="field">
+            <span>Caption</span>
+            <input id="figureCaptionInput" type="text" autocomplete="off" placeholder="图片说明">
+          </label>
+          <label class="field">
+            <span>Label</span>
+            <input id="figureLabelInput" type="text" autocomplete="off" placeholder="fig:example">
+          </label>
+        </div>
+        <small class="field-note">PaperBridge 会尽量转换为 LaTeX 浮动体位置；最终页码和列位置仍由 LaTeX 编译结果决定。</small>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelFigureButton" type="button">取消</button>
+        <button class="button primary" id="insertFigureSubmitButton" type="submit"><i data-lucide="image-plus"></i><span>生成并插入</span></button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog class="git-push-dialog" id="gitPushDialog">
     <form class="git-push-form" id="gitPushForm">
       <div class="dialog-header">
@@ -596,9 +652,14 @@
           <span>PaperBridge 数据目录</span>
           <div class="path-input-row">
             <input id="storageRootInput" type="text" autocomplete="off" readonly>
-            <button class="icon-button" id="chooseStorageFolderButton" type="button" title="更改数据目录"><i data-lucide="folder-cog"></i></button>
+            <button class="button secondary migrate-storage-button" id="chooseStorageFolderButton" type="button" title="选择新的数据目录">
+              <i data-lucide="folder-open"></i><span>选择新位置</span>
+            </button>
+            <button class="button primary migrate-storage-button" id="migrateStorageButton" type="button" title="迁移数据目录" disabled>
+              <i data-lucide="folder-cog"></i><span>迁移数据目录</span>
+            </button>
           </div>
-          <small class="field-note">更改后会迁移配置、中文工作稿、备份和 PaperBridge 导入的项目。</small>
+          <small class="field-note" id="storageMigrationNote">选择新的空文件夹后，点击“迁移数据目录”才会迁移配置、中文工作稿、备份和 PaperBridge 导入的项目；外部本地项目不会移动。</small>
         </label>
         <label class="field wide">
           <span>论文目录</span>
@@ -612,6 +673,7 @@
           <div class="path-input-row">
             <input id="overleafTokenInput" type="password" autocomplete="new-password">
             <button class="icon-button" id="openSettingsOverleafTokenButton" type="button" title="打开 Overleaf Token 设置"><i data-lucide="external-link"></i></button>
+            <button class="icon-button" id="clearOverleafTokenButton" type="button" title="清除已保存的 Overleaf Token"><i data-lucide="trash-2"></i></button>
           </div>
         </label>
         <label class="field">

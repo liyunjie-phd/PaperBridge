@@ -57,8 +57,11 @@ const state = {
   bilingualSplit: Math.min(70, Math.max(30, Number(localStorage.getItem("paperBridge.bilingualSplit") || 50))),
   workspaceSplit: Math.min(72, Math.max(32, Number(localStorage.getItem("paperBridge.workspaceSplit") || 54))),
   resizeFrame: 0,
+  projectRefreshTimer: 0,
   setupMode: "initial",
+  storageRootSelected: false,
   paragraphAnchor: null,
+  figureAnchor: null,
   gitPushResolver: null,
   currentSectionId: null,
   mainTexResolver: null,
@@ -78,7 +81,8 @@ const state = {
   dismissedBuildDrawerFingerprint: "",
   terminologyFile: null,
   terminologyEntries: [],
-  terminologyDirty: false
+  terminologyDirty: false,
+  draggingMathBlock: null
 };
 
 const elements = {
@@ -86,6 +90,7 @@ const elements = {
   sidebar: document.querySelector(".sidebar"),
   projectName: document.querySelector("#projectName"),
   syncState: document.querySelector("#syncState"),
+  sidebarProjectList: document.querySelector("#sidebarProjectList"),
   documentCount: document.querySelector("#documentCount"),
   documentList: document.querySelector("#documentList"),
   translationProgress: document.querySelector("#translationProgress"),
@@ -127,6 +132,8 @@ const elements = {
   sourceLineNumbers: document.querySelector("#sourceLineNumbers"),
   sourceStatus: document.querySelector("#sourceStatus"),
   saveSourceButton: document.querySelector("#saveSourceButton"),
+  createTexFileButton: document.querySelector("#createTexFileButton"),
+  insertFigureSourceButton: document.querySelector("#insertFigureSourceButton"),
   modularizeButton: document.querySelector("#modularizeButton"),
   sourceSearchInput: null,
   sourceSearchCount: null,
@@ -150,6 +157,7 @@ const elements = {
   setupDialog: document.querySelector("#setupDialog"),
   setupForm: document.querySelector("#setupForm"),
   setupMessage: document.querySelector("#setupMessage"),
+  recentProjectList: document.querySelector("#recentProjectList"),
   dependencyStatus: document.querySelector("#dependencyStatus"),
   settingsDialog: document.querySelector("#settingsDialog"),
   settingsForm: document.querySelector("#settingsForm"),
@@ -159,6 +167,14 @@ const elements = {
   paragraphDialog: document.querySelector("#paragraphDialog"),
   paragraphForm: document.querySelector("#paragraphForm"),
   newParagraphChinese: document.querySelector("#newParagraphChinese"),
+  figureDialog: document.querySelector("#figureDialog"),
+  figureForm: document.querySelector("#figureForm"),
+  figureAnchorMeta: document.querySelector("#figureAnchorMeta"),
+  figureImagesInput: document.querySelector("#figureImagesInput"),
+  figurePlacementInput: document.querySelector("#figurePlacementInput"),
+  figureCaptionInput: document.querySelector("#figureCaptionInput"),
+  figureLabelInput: document.querySelector("#figureLabelInput"),
+  insertFigureSubmitButton: document.querySelector("#insertFigureSubmitButton"),
   gitPushDialog: document.querySelector("#gitPushDialog"),
   gitPushForm: document.querySelector("#gitPushForm"),
   gitPushList: document.querySelector("#gitPushList"),
@@ -326,6 +342,105 @@ function updateSetupProviderDefaults() {
       : "https://api.deepseek.com";
 }
 
+function recentProjectTimeLabel(value) {
+  const time = Date.parse(value || "");
+  if (!Number.isFinite(time)) return "";
+  const days = Math.max(0, Math.floor((Date.now() - time) / 86_400_000));
+  if (days === 0) return "今天";
+  if (days === 1) return "昨天";
+  if (days < 30) return `${days} 天前`;
+  return new Date(time).toLocaleDateString();
+}
+
+function renderRecentProjects(project) {
+  const section = document.querySelector("#recentProjectsSection");
+  const list = elements.recentProjectList;
+  const projects = project.config?.recentProjects || [];
+  section.classList.toggle("hidden", projects.length === 0);
+  list.replaceChildren();
+  const currentRoot = String(project.config?.projectRoot || "").toLowerCase();
+  const currentMainTex = String(project.config?.mainTex || "").toLowerCase();
+  for (const item of projects) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "recent-project-button";
+    button.innerHTML = `
+      <i data-lucide="folder"></i>
+      <div>
+        <div class="recent-project-main"></div>
+        <div class="recent-project-path"></div>
+      </div>
+      <div class="recent-project-meta"></div>
+    `;
+    const isCurrent = currentRoot === String(item.projectRoot || "").toLowerCase()
+      && currentMainTex === String(item.mainTex || "").toLowerCase();
+    button.querySelector(".recent-project-main").textContent = `${item.name || "论文项目"} · ${item.mainTex}`;
+    button.querySelector(".recent-project-path").textContent = item.projectRoot;
+    button.querySelector(".recent-project-meta").textContent = isCurrent ? "当前项目" : recentProjectTimeLabel(item.updatedAt);
+    button.addEventListener("click", () => openRecentProject(item, button));
+    list.append(button);
+  }
+}
+
+function renderSidebarProjectList(project = state.project) {
+  const list = elements.sidebarProjectList;
+  if (!list) return;
+  const projects = (project?.config?.recentProjects || []).slice(0, 6);
+  list.replaceChildren();
+  if (!projects.length) {
+    const empty = document.createElement("div");
+    empty.className = "project-switch-empty";
+    empty.textContent = "当前项目";
+    list.append(empty);
+    return;
+  }
+  const currentRoot = String(project.config?.projectRoot || "").toLowerCase();
+  const currentMainTex = String(project.config?.mainTex || "").toLowerCase();
+  for (const item of projects) {
+    const button = document.createElement("button");
+    const isCurrent = currentRoot === String(item.projectRoot || "").toLowerCase()
+      && currentMainTex === String(item.mainTex || "").toLowerCase();
+    button.type = "button";
+    button.className = `project-switch-button ${isCurrent ? "active" : ""}`;
+    button.title = item.projectRoot || "";
+    button.innerHTML = `
+      <i data-lucide="${isCurrent ? "folder-open" : "folder"}"></i>
+      <span class="project-switch-name"></span>
+      <span class="project-switch-meta"></span>
+    `;
+    button.querySelector(".project-switch-name").textContent = item.name || fileLabel(item.projectRoot || "论文项目");
+    button.querySelector(".project-switch-meta").textContent = isCurrent ? "当前" : item.mainTex || recentProjectTimeLabel(item.updatedAt);
+    button.addEventListener("click", () => {
+      if (!isCurrent) void openRecentProject(item, button);
+    });
+    list.append(button);
+  }
+  refreshIcons();
+}
+
+async function openRecentProject(project, button) {
+  if (state.sourceDirty) {
+    if (!confirmDiscardSourceChanges()) return;
+    state.sourceDirty = false;
+  }
+  setBusy(button, true);
+  if (elements.setupDialog.open) setSetupMessage("正在打开历史项目...");
+  try {
+    await api("/api/project/open", {
+      method: "POST",
+      body: JSON.stringify({ projectRoot: project.projectRoot, mainTex: project.mainTex })
+    });
+    if (elements.setupDialog.open) elements.setupDialog.close();
+    const ready = await refreshProject({ preserveDocument: false });
+    if (ready) toast("已切换到历史项目。", "success");
+  } catch (error) {
+    if (elements.setupDialog.open) setSetupMessage(`无法打开历史项目：${error.message}`, "error");
+    toast(`无法打开历史项目：${error.message}`, "error", 6200);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 function openSetup(project, { switching = false } = {}) {
   state.setupMode = switching ? "switch" : "initial";
   document.querySelector("#setupTitle").textContent = switching ? "添加或切换论文" : "开始使用 PaperBridge";
@@ -360,6 +475,7 @@ function openSetup(project, { switching = false } = {}) {
   const setupAutoCompile = document.querySelector("#setupAutoCompile");
   setupAutoCompile.checked = project.config?.autoCompile === true;
   setupAutoCompile.closest("label")?.classList.add("hidden");
+  renderRecentProjects(project);
   setSetupMessage();
   const compiler = project.dependencies?.compiler;
   elements.dependencyStatus.textContent = compiler === "latexmk"
@@ -1209,6 +1325,7 @@ function updateProjectHeader() {
   else if (git.ahead) syncText = `${git.ahead} 次提交待推送`;
   else if (hasRemote) syncText = `已与 ${remoteLabel} 对齐`;
   elements.syncState.querySelector("span:last-child").textContent = syncText;
+  renderSidebarProjectList(state.project);
 }
 
 function updateTranslationProgress() {
@@ -2201,7 +2318,7 @@ async function refreshProject({ preserveDocument = true } = {}) {
   }
   updateProjectHeader();
   renderDocumentList();
-  renderSourceFileOptions();
+  renderSourceFileOptions(state.sourceDirty ? state.sourceFile : state.currentFile);
   if (state.previewMode === "pdf") updatePdf();
   else scheduleFastPreview(state.currentDocument?.file || state.currentFile || state.project.config?.mainTex || "");
   if (state.mode === "source" && !state.sourceFile && elements.sourceFileSelect.value) {
@@ -2213,12 +2330,80 @@ async function refreshProject({ preserveDocument = true } = {}) {
   return true;
 }
 
+function scheduleProjectRefresh(delay = 160) {
+  window.clearTimeout(state.projectRefreshTimer);
+  state.projectRefreshTimer = window.setTimeout(async () => {
+    state.projectRefreshTimer = 0;
+    try {
+      await refreshProject();
+    } catch (error) {
+      console.warn("Background project refresh failed:", error);
+    }
+  }, delay);
+}
+
+function clearMathDropTargets() {
+  elements.segmentList.querySelectorAll(".math-drop-before, .math-drop-after").forEach((row) => {
+    row.classList.remove("math-drop-before", "math-drop-after");
+  });
+}
+
+function mathDropPosition(row, event) {
+  const rect = row.getBoundingClientRect();
+  return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
+
+function attachMathDropTarget(row, target) {
+  row.addEventListener("dragover", (event) => {
+    if (!state.draggingMathBlock || state.draggingMathBlock.file !== target.file) return;
+    if (target.type === "math" && target.id === state.draggingMathBlock.id) return;
+    event.preventDefault();
+    const position = mathDropPosition(row, event);
+    row.classList.toggle("math-drop-before", position === "before");
+    row.classList.toggle("math-drop-after", position === "after");
+  });
+  row.addEventListener("dragleave", () => {
+    row.classList.remove("math-drop-before", "math-drop-after");
+  });
+  row.addEventListener("drop", async (event) => {
+    if (!state.draggingMathBlock || state.draggingMathBlock.file !== target.file) return;
+    event.preventDefault();
+    const dragged = state.draggingMathBlock;
+    const position = mathDropPosition(row, event);
+    clearMathDropTargets();
+    try {
+      const result = await api("/api/math-block/move", {
+        method: "POST",
+        body: JSON.stringify({
+          file: dragged.file,
+          id: dragged.id,
+          sourceHash: dragged.sourceHash,
+          startLine: dragged.startLine,
+          target: { ...target, position },
+          deferCompile: state.project?.config?.autoCompile !== true
+        })
+      });
+      state.currentDocument = result.document;
+      renderSegments();
+      scheduleFastPreview(result.document.file, 0);
+      updateBuild(result.build);
+      scheduleProjectRefresh();
+      toast("公式块已移动。", "success");
+    } catch (error) {
+      toast(error.message, "error", 5600);
+    } finally {
+      state.draggingMathBlock = null;
+    }
+  });
+}
+
 function createSegmentRow(segment) {
   const row = document.createElement("article");
   row.className = "segment-row";
   row.dataset.segmentId = segment.id;
   row.dataset.file = segment.file;
   row.dataset.segmentIndex = String(segment.index);
+  row.dataset.segmentSourceHash = segment.sourceHash;
   row.innerHTML = `
     <div class="segment-header">
       <div class="segment-identity">
@@ -2276,7 +2461,7 @@ function createSegmentRow(segment) {
       });
       state.currentDocument = result.document;
       renderSegments();
-      await refreshProject();
+      scheduleProjectRefresh();
       const translated = result.progress?.translated || 0;
       setFileTranslationProgress(1, 1, translated ? "本段中文已生成" : "模型未返回本段翻译", translated ? "" : "warning");
       toast(translated ? "已仅翻译当前段落。" : "模型没有返回当前段落的有效中文翻译。", translated ? "success" : "error", 5200);
@@ -2339,7 +2524,7 @@ function createSegmentRow(segment) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      await refreshProject();
+      scheduleProjectRefresh();
       toast("本段已注释，TeX 源码仍然保留。", "success", 4600);
     } catch (error) {
       toast(error.message, "error", 5600);
@@ -2400,7 +2585,7 @@ function createSegmentRow(segment) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      await refreshProject();
+      scheduleProjectRefresh();
       if (result.build && !result.build.skipped) {
         setFileTranslationProgress(2, 2, result.build.success ? "英文与 PDF 已更新" : "英文已写入 TeX，但编译存在错误", result.build.success ? "" : "error");
         toast(result.build.success ? "英文段落和 PDF 已更新。" : "英文段落已写入 TeX，但 PDF 编译存在错误。", result.build.success ? "success" : "error", 5600);
@@ -2447,7 +2632,7 @@ function createSegmentRow(segment) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      await refreshProject();
+      scheduleProjectRefresh();
       if (result.build && !result.build.skipped) {
         toast(result.build.success ? "英文修改已写入 TeX，PDF 已更新。" : "英文修改已写入 TeX，但编译仍有错误。", result.build.success ? "success" : "error");
       } else {
@@ -2491,13 +2676,19 @@ function createSegmentRow(segment) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      await refreshProject();
+      scheduleProjectRefresh();
       toast("段落已删除。", "success");
     } catch (error) {
       toast(error.payload?.code === "LAST_PARAGRAPH" ? "每个文件至少需要保留一个可编辑正文段落。" : error.message, "error", 5200);
     } finally {
       setBusy(deleteParagraphButton, false);
     }
+  });
+  attachMathDropTarget(row, {
+    type: "segment",
+    file: segment.file,
+    index: segment.index,
+    sourceHash: segment.sourceHash
   });
   return row;
 }
@@ -2521,6 +2712,7 @@ function createMathBlockRow(block) {
         <span class="segment-status synced">公式 TeX</span>
       </div>
       <div class="segment-actions">
+        <button class="mini-button math-drag-handle" type="button" draggable="true" title="拖动公式到其他段落之间"><i data-lucide="grip-vertical"></i></button>
         <button class="mini-button save-math-button" type="button" title="保存公式 TeX"><i data-lucide="save"></i></button>
         <button class="mini-button revert-math-button" type="button" title="恢复已加载的公式"><i data-lucide="undo-2"></i></button>
       </div>
@@ -2532,6 +2724,7 @@ function createMathBlockRow(block) {
 
   const status = row.querySelector(".segment-status");
   const editor = row.querySelector(".math-source-editor");
+  const dragHandle = row.querySelector(".math-drag-handle");
   const saveButton = row.querySelector(".save-math-button");
   const revertButton = row.querySelector(".revert-math-button");
 
@@ -2539,6 +2732,24 @@ function createMathBlockRow(block) {
   row.querySelector(".line-range").textContent = `L${block.startLine}-${block.endLine}`;
   editor.value = block.source || "";
   window.requestAnimationFrame(() => fitMathBlockEditor(editor));
+
+  dragHandle.addEventListener("dragstart", (event) => {
+    state.draggingMathBlock = {
+      file: block.file,
+      id: block.id,
+      sourceHash: block.sourceHash,
+      startLine: block.startLine
+    };
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", block.id);
+    row.classList.add("dragging");
+  });
+
+  dragHandle.addEventListener("dragend", () => {
+    state.draggingMathBlock = null;
+    row.classList.remove("dragging");
+    clearMathDropTargets();
+  });
 
   editor.addEventListener("input", () => {
     editor.classList.add("changed");
@@ -2574,7 +2785,7 @@ function createMathBlockRow(block) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      await refreshProject();
+      scheduleProjectRefresh();
       toast(
         result.build && !result.build.skipped
           ? result.build.success ? "公式已保存，PDF 已更新。" : "公式已保存，但编译仍有错误。"
@@ -2589,6 +2800,134 @@ function createMathBlockRow(block) {
     }
   });
 
+  attachMathDropTarget(row, {
+    type: "math",
+    file: block.file,
+    id: block.id,
+    sourceHash: block.sourceHash,
+    startLine: block.startLine
+  });
+  return row;
+}
+
+function tableMatrix(block, kind) {
+  const english = (block.rows || []).map((row) => row.cells.map((cell) => cell.text || ""));
+  if (kind === "english") return english;
+  const chinese = Array.isArray(block.chineseRows) ? block.chineseRows : [];
+  return english.map((row, rowIndex) => row.map((cell, columnIndex) => (
+    chinese[rowIndex]?.[columnIndex] ?? cell
+  )));
+}
+
+function createEditableTable(matrix, className) {
+  const table = document.createElement("table");
+  table.className = `editable-paper-table ${className}`;
+  const tbody = document.createElement("tbody");
+  matrix.forEach((row) => {
+    const tr = document.createElement("tr");
+    row.forEach((cell) => {
+      const td = document.createElement("td");
+      const textarea = document.createElement("textarea");
+      textarea.value = cell;
+      textarea.rows = 1;
+      textarea.addEventListener("input", () => {
+        textarea.style.height = "auto";
+        textarea.style.height = `${Math.max(34, textarea.scrollHeight)}px`;
+      });
+      window.requestAnimationFrame(() => {
+        textarea.style.height = "auto";
+        textarea.style.height = `${Math.max(34, textarea.scrollHeight)}px`;
+      });
+      td.append(textarea);
+      tr.append(td);
+    });
+    tbody.append(tr);
+  });
+  table.append(tbody);
+  return table;
+}
+
+function readEditableTable(table) {
+  return [...table.querySelectorAll("tr")].map((row) => (
+    [...row.querySelectorAll("textarea")].map((textarea) => textarea.value.trim())
+  ));
+}
+
+function createTableBlockRow(block) {
+  const row = document.createElement("article");
+  row.className = "table-row";
+  row.dataset.file = block.file;
+  row.dataset.tableId = block.id;
+  row.innerHTML = `
+    <div class="segment-header table-header">
+      <div class="segment-identity">
+        <span class="segment-index"></span>
+        <span class="line-range"></span>
+        <span class="segment-status synced">表格</span>
+      </div>
+      <div class="segment-actions">
+        <button class="mini-button save-table-button" type="button" title="保存表格"><i data-lucide="save"></i></button>
+        <button class="mini-button revert-table-button" type="button" title="恢复已加载的表格"><i data-lucide="undo-2"></i></button>
+      </div>
+    </div>
+    <div class="table-editor">
+      <div class="table-editor-label">中文表格</div>
+      <div class="table-editor-scroll chinese-table"></div>
+      <div class="table-editor-label">英文表格</div>
+      <div class="table-editor-scroll english-table"></div>
+    </div>
+  `;
+  const status = row.querySelector(".segment-status");
+  const saveButton = row.querySelector(".save-table-button");
+  const revertButton = row.querySelector(".revert-table-button");
+  const chineseShell = row.querySelector(".chinese-table");
+  const englishShell = row.querySelector(".english-table");
+
+  const renderTables = () => {
+    chineseShell.replaceChildren(createEditableTable(tableMatrix(block, "chinese"), "chinese"));
+    englishShell.replaceChildren(createEditableTable(tableMatrix(block, "english"), "english"));
+    status.textContent = "表格";
+    status.className = "segment-status synced";
+  };
+
+  row.querySelector(".segment-index").textContent = `T${String((block.index || 0) + 1).padStart(2, "0")}`;
+  row.querySelector(".line-range").textContent = `L${block.startLine}-${block.endLine}`;
+  renderTables();
+  row.addEventListener("input", (event) => {
+    if (!event.target.closest(".table-editor")) return;
+    status.textContent = "表格待保存";
+    status.className = "segment-status english-changed";
+  });
+
+  revertButton.addEventListener("click", renderTables);
+
+  saveButton.addEventListener("click", async () => {
+    setBusy(saveButton, true);
+    try {
+      const result = await api("/api/table-block", {
+        method: "POST",
+        body: JSON.stringify({
+          file: block.file,
+          id: block.id,
+          sourceHash: block.sourceHash,
+          startLine: block.startLine,
+          chineseRows: readEditableTable(chineseShell.querySelector("table")),
+          englishRows: readEditableTable(englishShell.querySelector("table")),
+          deferCompile: state.project?.config?.autoCompile !== true
+        })
+      });
+      state.currentDocument = result.document;
+      renderSegments();
+      scheduleFastPreview(result.document.file, 0);
+      updateBuild(result.build);
+      scheduleProjectRefresh();
+      toast("表格已保存。", "success");
+    } catch (error) {
+      toast(error.message, "error", 5600);
+    } finally {
+      setBusy(saveButton, false);
+    }
+  });
   return row;
 }
 
@@ -2648,7 +2987,7 @@ async function submitNewParagraph(event) {
     renderSegments();
     scheduleFastPreview(result.document.file, 0);
     updateBuild(result.build);
-    await refreshProject();
+    scheduleProjectRefresh();
     toast("新段落已生成并插入。", "success");
   } catch (error) {
     const missing = error.payload?.details?.missingTokens;
@@ -2665,6 +3004,112 @@ async function submitNewParagraph(event) {
     );
   } finally {
     setBusy(button, false);
+  }
+}
+
+function figureAnchorText(anchor) {
+  if (!anchor) return "选择图片和排版位置";
+  if (anchor.type === "source") return `${anchor.file} · 当前 TeX 光标位置`;
+  return `${anchor.file} · P${String(Number(anchor.index || 0) + 1).padStart(2, "0")} 后方`;
+}
+
+function openFigureDialog(anchor) {
+  state.figureAnchor = anchor;
+  elements.figureImagesInput.value = "";
+  elements.figurePlacementInput.value = anchor?.type === "source"
+    ? "插入当前位置附近，放在栏顶部"
+    : "插入本段之后，放在栏顶部";
+  elements.figureCaptionInput.value = "";
+  elements.figureLabelInput.value = "";
+  elements.figureAnchorMeta.textContent = figureAnchorText(anchor);
+  if (!elements.figureDialog.open) elements.figureDialog.showModal();
+  window.requestAnimationFrame(() => elements.figureImagesInput.focus());
+}
+
+function closeFigureDialog() {
+  state.figureAnchor = null;
+  if (elements.figureDialog.open) elements.figureDialog.close();
+}
+
+async function openSourceFigureDialog() {
+  if (!state.sourceFile) {
+    toast("请先选择一个 TeX 文件。", "error");
+    return;
+  }
+  if (!state.sourceFile.toLowerCase().endsWith(".tex")) {
+    toast("图片只能插入 TeX 文件，不能插入 Bib 文件。", "error");
+    return;
+  }
+  if (state.sourceDirty) {
+    const saved = await saveSourceFile({ deferCompile: true, quiet: true, refreshPreview: false });
+    if (!saved) return;
+  }
+  openFigureDialog({
+    type: "source",
+    file: state.sourceFile,
+    sourceHash: state.sourceHash,
+    cursorOffset: elements.sourceEditor.selectionStart || 0
+  });
+}
+
+function applyFigureInsertionResult(result) {
+  if (result.source && result.source.file === state.sourceFile) {
+    state.sourceHash = result.source.sourceHash;
+    state.sourceEol = result.source.eol || state.sourceEol;
+    elements.sourceEditor.value = result.source.content;
+    state.sourceSavedContent = elements.sourceEditor.value;
+    state.sourceDirty = false;
+    updateSourceLineNumbers();
+    setSourceDirty(false);
+    refreshSourceSearch();
+  }
+  if (result.document && result.document.file === state.currentFile) {
+    state.currentDocument = result.document;
+    renderSegments();
+  }
+  const previewFile = result.document?.file || result.source?.file || state.currentFile || state.sourceFile;
+  if (previewFile?.toLowerCase().endsWith(".tex")) scheduleFastPreview(previewFile, 0);
+  updateBuild(result.build);
+  scheduleProjectRefresh();
+}
+
+async function submitFigureInsertion(event) {
+  event.preventDefault();
+  const anchor = state.figureAnchor;
+  if (!anchor) return;
+  if (state.sourceDirty && state.sourceFile === anchor.file) {
+    const saved = await saveSourceFile({ deferCompile: true, quiet: true, refreshPreview: false });
+    if (!saved) return;
+    if (anchor.type === "source") anchor.sourceHash = state.sourceHash;
+  }
+  const images = elements.figureImagesInput.value.trim();
+  if (!images) {
+    toast("请先输入至少一张图片链接或路径。", "error");
+    elements.figureImagesInput.focus();
+    return;
+  }
+  setBusy(elements.insertFigureSubmitButton, true);
+  try {
+    const result = await api("/api/figure/insert", {
+      method: "POST",
+      body: JSON.stringify({
+        file: anchor.file,
+        anchor,
+        images,
+        description: elements.figurePlacementInput.value.trim(),
+        caption: elements.figureCaptionInput.value.trim(),
+        label: elements.figureLabelInput.value.trim(),
+        deferCompile: state.project?.config?.autoCompile !== true
+      })
+    });
+    closeFigureDialog();
+    applyFigureInsertionResult(result);
+    const copied = (result.assets || []).filter((asset) => asset.copied).length;
+    toast(`已插入 ${result.assets?.length || 0} 张图片${copied ? `，并复制到项目内 ${copied} 张` : ""}。`, "success", 5600);
+  } catch (error) {
+    toast(error.message, "error", 6800);
+  } finally {
+    setBusy(elements.insertFigureSubmitButton, false);
   }
 }
 
@@ -2707,20 +3152,22 @@ function renderSegments() {
   const documentPayload = state.currentDocument;
   const sections = renderTranslationSections(documentPayload);
   const mathBlocks = documentPayload.mathBlocks || [];
+  const tableBlocks = documentPayload.tableBlocks || [];
   const items = [
     ...documentPayload.segments.map((segment) => ({ type: "segment", startLine: segment.startLine, item: segment })),
-    ...mathBlocks.map((block) => ({ type: "math", startLine: block.startLine, item: block }))
+    ...mathBlocks.map((block) => ({ type: "math", startLine: block.startLine, item: block })),
+    ...tableBlocks.map((block) => ({ type: "table", startLine: block.startLine, item: block }))
   ].sort((left, right) => (
     Number(left.startLine || 0) - Number(right.startLine || 0)
-    || (left.type === "segment" ? -1 : 1)
+    || (left.type === "segment" ? -1 : left.type === "math" ? 0 : 1)
   ));
   elements.currentFile.textContent = fileLabel(documentPayload.file);
-  elements.fileMeta.textContent = `${documentPayload.segments.length} 段 · ${mathBlocks.length} 公式 · ${sections.length} 节`;
+  elements.fileMeta.textContent = `${documentPayload.segments.length} 段 · ${mathBlocks.length} 公式 · ${tableBlocks.length} 表格 · ${sections.length} 节`;
   elements.segmentList.replaceChildren();
   if (!items.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = "此文件没有检测到可编辑的正文段落或公式";
+    empty.textContent = "此文件没有检测到可编辑的正文段落、公式或表格";
     elements.segmentList.append(empty);
   } else {
     let previousHeadingPath = [];
@@ -2747,7 +3194,11 @@ function renderSegments() {
         node.append(kind, title, line);
         elements.segmentList.append(node);
       }
-      elements.segmentList.append(entry.type === "segment" ? createSegmentRow(entry.item) : createMathBlockRow(entry.item));
+      elements.segmentList.append(
+        entry.type === "segment"
+          ? createSegmentRow(entry.item)
+          : entry.type === "math" ? createMathBlockRow(entry.item) : createTableBlockRow(entry.item)
+      );
       previousHeadingPath = headingPath;
     }
   }
@@ -2765,6 +3216,12 @@ async function loadDocument(file) {
     state.currentDocument = await api(`/api/document?file=${encodeURIComponent(file)}`);
     renderSegments();
     if (state.previewMode === "fast") scheduleFastPreview(file, 0);
+    if (state.mode === "source") {
+      const loaded = await loadSourceFile(file);
+      if (!loaded) renderSourceFileOptions(state.sourceFile);
+    } else if (!state.sourceDirty) {
+      renderSourceFileOptions(file);
+    }
   } catch (error) {
     toast(error.message, "error");
   }
@@ -2929,11 +3386,15 @@ function confirmDiscardSourceChanges() {
   return !state.sourceDirty || window.confirm("当前源码有未保存修改。放弃这些修改吗？");
 }
 
-function renderSourceFileOptions() {
+function renderSourceFileOptions(preferredFile = "") {
   const files = state.project?.sourceFiles || state.project?.texFiles || [];
-  const preferred = files.includes(state.sourceFile)
-    ? state.sourceFile
-    : files.includes(state.project?.config?.mainTex) ? state.project.config.mainTex : files[0];
+  const requested = String(preferredFile || "").replaceAll("\\", "/");
+  const currentDocumentFile = String(state.currentFile || state.currentDocument?.file || "").replaceAll("\\", "/");
+  let preferred = files.includes(requested) ? requested : "";
+  if (!preferred && !state.sourceDirty && files.includes(currentDocumentFile)) preferred = currentDocumentFile;
+  if (!preferred && files.includes(state.sourceFile)) preferred = state.sourceFile;
+  if (!preferred && files.includes(state.project?.config?.mainTex)) preferred = state.project.config.mainTex;
+  if (!preferred) preferred = files[0];
   elements.sourceFileSelect.replaceChildren();
   for (const file of files) {
     const option = document.createElement("option");
@@ -3015,7 +3476,13 @@ async function saveSourceFile(options = {}) {
     state.sourceDirty = false;
     if (options.refreshPreview !== false) scheduleFastPreview(previewFileAfterSourceChange(state.sourceFile), 0);
     updateBuild(result.build);
-    await refreshProject();
+    const savedFile = result.source.file;
+    if (result.project) state.project = result.project;
+    scheduleProjectRefresh(900);
+    if (result.document && savedFile === state.currentFile) {
+      state.currentDocument = result.document;
+      renderSegments();
+    }
     if (!quiet) {
       const kind = state.sourceFile.toLowerCase().endsWith(".bib") ? "Bib" : "TeX";
       toast(
@@ -3042,6 +3509,34 @@ async function saveSourceFile(options = {}) {
   } finally {
     setBusy(button, false);
     setSourceDirty(elements.sourceEditor.value !== state.sourceSavedContent);
+  }
+}
+
+async function createTexFile() {
+  if (state.sourceDirty) {
+    const saved = await saveSourceFile({ deferCompile: true, quiet: true, refreshPreview: false });
+    if (!saved) return;
+  }
+  const file = window.prompt("请输入新的 TeX 文件名，例如 sections/new-section.tex", "new-section.tex");
+  if (file === null) return;
+  const prepared = file.trim();
+  if (!prepared) return;
+  setBusy(elements.createTexFileButton, true);
+  try {
+    const result = await api("/api/source/create", {
+      method: "POST",
+      body: JSON.stringify({ file: prepared })
+    });
+    state.project = result.project;
+    if (state.mode !== "source") setMode("source", { loadCurrent: false });
+    renderDocumentList();
+    renderSourceFileOptions(result.source.file);
+    await loadSourceFile(result.source.file, { force: true });
+    toast("TeX 文件已创建。", "success");
+  } catch (error) {
+    toast(error.message, "error", 5200);
+  } finally {
+    setBusy(elements.createTexFileButton, false);
   }
 }
 
@@ -3352,7 +3847,7 @@ async function translateCurrentFile() {
       setFileTranslationProgress(completed, total, `${currentFileLabel} · 已处理 ${completed} 个段落`);
     }
     renderSegments();
-    await refreshProject();
+    scheduleProjectRefresh();
     if (skipped) {
       setFileTranslationProgress(completed, total, `翻译完成，${skipped} 段未收到有效结果`, "warning");
       toast(`中文工作稿已更新，模型没有返回其中 ${skipped} 个段落的有效翻译。`, "error", 5600);
@@ -3826,7 +4321,7 @@ function setMode(mode, { loadCurrent = true } = {}) {
   elements.reviewView.classList.toggle("hidden", mode !== "review");
   elements.formatView.classList.toggle("hidden", mode !== "format");
   if (mode === "source") {
-    renderSourceFileOptions();
+    renderSourceFileOptions(loadCurrent ? state.currentFile : state.sourceFile);
     if (loadCurrent) void loadSourceFile(elements.sourceFileSelect.value, { force: true });
   }
   if (mode === "edit" && state.currentFile && loadCurrent) void loadDocument(state.currentFile);
@@ -3904,10 +4399,12 @@ function openSettings() {
   state.storageRootSelected = false;
   document.querySelector("#storageRootInput").value = config.storageRoot || config.suggestedStorageRoot || "";
   document.querySelector("#chooseStorageFolderButton").disabled = config.canChangeStorage === false;
+  document.querySelector("#migrateStorageButton").disabled = true;
   document.querySelector("#projectRootInput").value = config.projectRoot;
   const overleafToken = document.querySelector("#overleafTokenInput");
   overleafToken.value = "";
   overleafToken.placeholder = config.hasOverleafToken ? "已保存，留空保持不变" : "用于自动拉取和推送";
+  document.querySelector("#clearOverleafTokenButton").disabled = !config.hasOverleafToken;
   document.querySelector("#gitUsernameInput").value = config.gitUsername || "";
   const gitToken = document.querySelector("#gitTokenInput");
   gitToken.value = "";
@@ -3926,8 +4423,98 @@ function openSettings() {
     container.innerHTML = providerMarkup(prefix);
     fillProvider(prefix, config[prefix]);
   });
+  updateStorageMigrationButton();
   refreshIcons();
   elements.settingsDialog.showModal();
+}
+
+function updateStorageMigrationButton() {
+  const config = state.project?.config || {};
+  const input = document.querySelector("#storageRootInput");
+  const migrateButton = document.querySelector("#migrateStorageButton");
+  const note = document.querySelector("#storageMigrationNote");
+  const value = input.value.trim();
+  const canChange = config.canChangeStorage !== false;
+  const changed = state.storageRootSelected && value && value !== config.storageRoot;
+  migrateButton.disabled = !canChange || !changed;
+  if (!canChange) {
+    note.textContent = "当前运行方式不支持在软件内迁移数据目录。";
+  } else if (changed) {
+    note.textContent = "已选择新的数据位置。确认无误后，点击“迁移数据目录”执行迁移；仅保存设置不会迁移数据。";
+  } else {
+    note.textContent = "选择新的空文件夹后，点击“迁移数据目录”才会迁移配置、中文工作稿、备份和 PaperBridge 导入的项目；外部本地项目不会移动。";
+  }
+}
+
+async function migrateStorageFromSettings() {
+  const previous = state.project.config;
+  const storageRoot = document.querySelector("#storageRootInput").value.trim();
+  const storageChanged = state.storageRootSelected && storageRoot && storageRoot !== previous.storageRoot;
+  if (!storageChanged) {
+    toast("请先选择一个新的数据保存位置。", "warning");
+    return false;
+  }
+  if (state.sourceDirty) {
+    if (!confirmDiscardSourceChanges()) return false;
+    state.sourceDirty = false;
+  }
+  const confirmed = window.confirm([
+    "PaperBridge 将把配置、中文工作稿、备份和已导入的项目迁移到新位置。",
+    "外部打开的本地论文文件夹不会移动。迁移完成前请勿关闭程序。",
+    "",
+    `新位置：${storageRoot}`
+  ].join("\n"));
+  if (!confirmed) return false;
+  const button = document.querySelector("#migrateStorageButton");
+  setBusy(button, true);
+  try {
+    const oldProjectRoot = previous.projectRoot;
+    let projectRoot = document.querySelector("#projectRootInput").value.trim();
+    const result = await api("/api/storage/migrate", {
+      method: "POST",
+      body: JSON.stringify({ storageRoot })
+    });
+    state.project = result.project;
+    const nextConfig = state.project.config;
+    if (projectRoot === oldProjectRoot) projectRoot = nextConfig.projectRoot;
+    document.querySelector("#storageRootInput").value = nextConfig.storageRoot;
+    document.querySelector("#projectRootInput").value = projectRoot;
+    state.storageRootSelected = false;
+    updateStorageMigrationButton();
+    await refreshProject({ preserveDocument: false });
+    if (result.migration.cleanupWarning) toast(result.migration.cleanupWarning, "error", 7000);
+    toast("数据目录迁移完成。", "success");
+    return true;
+  } catch (error) {
+    toast(error.message, "error", 7000);
+    return false;
+  } finally {
+    setBusy(button, false);
+    updateStorageMigrationButton();
+  }
+}
+
+async function clearOverleafToken() {
+  const button = document.querySelector("#clearOverleafTokenButton");
+  if (!state.project.config?.hasOverleafToken && !document.querySelector("#overleafTokenInput").value.trim()) {
+    toast("当前没有已保存的 Overleaf Token。", "warning");
+    return;
+  }
+  if (!window.confirm("确定清除已保存的 Overleaf Git Token 吗？清除后，Overleaf 拉取和推送需要重新填写 Token。")) return;
+  setBusy(button, true);
+  try {
+    const next = await api("/api/config/clear-overleaf-token", { method: "POST", body: "{}" });
+    state.project.config = { ...state.project.config, ...next };
+    const input = document.querySelector("#overleafTokenInput");
+    input.value = "";
+    input.placeholder = "用于自动拉取和推送";
+    button.disabled = true;
+    toast("已清除保存的 Overleaf Token。", "success");
+  } catch (error) {
+    toast(error.message, "error", 5200);
+  } finally {
+    setBusy(button, false);
+  }
 }
 
 async function saveSettings({ close = true } = {}) {
@@ -3936,30 +4523,13 @@ async function saveSettings({ close = true } = {}) {
   const mainTex = document.querySelector("#mainTexInput").value.trim();
   const storageRoot = document.querySelector("#storageRootInput").value.trim();
   const storageChanged = state.storageRootSelected && storageRoot && storageRoot !== previous.storageRoot;
-  if ((projectRoot !== previous.projectRoot || mainTex !== previous.mainTex || storageChanged) && state.sourceDirty) {
+  if ((projectRoot !== previous.projectRoot || mainTex !== previous.mainTex) && state.sourceDirty) {
     if (!confirmDiscardSourceChanges()) return false;
     state.sourceDirty = false;
   }
   if (storageChanged) {
-    const confirmed = window.confirm([
-      "PaperBridge 将把配置、中文工作稿、备份和已导入的项目迁移到新位置。",
-      "外部打开的本地论文文件夹不会移动。迁移完成前请勿关闭程序。",
-      "",
-      `新位置：${storageRoot}`
-    ].join("\n"));
-    if (!confirmed) return false;
-    const oldProjectRoot = previous.projectRoot;
-    const result = await api("/api/storage/migrate", {
-      method: "POST",
-      body: JSON.stringify({ storageRoot })
-    });
-    state.project = result.project;
-    previous = state.project.config;
-    if (projectRoot === oldProjectRoot) projectRoot = previous.projectRoot;
-    document.querySelector("#storageRootInput").value = previous.storageRoot;
-    state.storageRootSelected = false;
-    document.querySelector("#projectRootInput").value = projectRoot;
-    if (result.migration.cleanupWarning) toast(result.migration.cleanupWarning, "error", 7000);
+    toast("数据目录不会随“保存设置”自动迁移。请点击“迁移数据目录”按钮执行迁移。", "warning", 6500);
+    return false;
   }
   const next = await api("/api/config", {
     method: "POST",
@@ -4094,10 +4664,15 @@ function bindEvents() {
   document.querySelector("#chooseLocalButton").addEventListener("click", () => chooseDesktopPath("folder", document.querySelector("#setupLocalPath")));
   document.querySelector("#chooseSetupStorageButton").addEventListener("click", () => chooseStoragePath(document.querySelector("#setupStorageRoot")));
   document.querySelector("#chooseStorageFolderButton").addEventListener("click", async () => {
-    if (await chooseStoragePath(document.querySelector("#storageRootInput"))) state.storageRootSelected = true;
+    if (await chooseStoragePath(document.querySelector("#storageRootInput"))) {
+      state.storageRootSelected = true;
+      updateStorageMigrationButton();
+    }
   });
+  document.querySelector("#migrateStorageButton").addEventListener("click", migrateStorageFromSettings);
   document.querySelector("#storageRootInput").addEventListener("input", () => {
     state.storageRootSelected = true;
+    updateStorageMigrationButton();
   });
   document.querySelector("#chooseSettingsFolderButton").addEventListener("click", async () => {
     const input = document.querySelector("#projectRootInput");
@@ -4111,6 +4686,7 @@ function bindEvents() {
   };
   document.querySelector("#openOverleafTokenButton").addEventListener("click", openOverleafTokenPage);
   document.querySelector("#openSettingsOverleafTokenButton").addEventListener("click", openOverleafTokenPage);
+  document.querySelector("#clearOverleafTokenButton").addEventListener("click", clearOverleafToken);
   document.querySelector("#setupTestButton").addEventListener("click", testSetupProvider);
   elements.setupForm.addEventListener("submit", submitSetup);
   elements.mainTexForm.addEventListener("submit", (event) => {
@@ -4123,6 +4699,13 @@ function bindEvents() {
   document.querySelector("#cancelParagraphButton").addEventListener("click", closeParagraphDialog);
   elements.paragraphDialog.addEventListener("close", () => {
     state.paragraphAnchor = null;
+  });
+  elements.insertFigureSourceButton.addEventListener("click", openSourceFigureDialog);
+  elements.figureForm.addEventListener("submit", submitFigureInsertion);
+  document.querySelector("#closeFigureButton").addEventListener("click", closeFigureDialog);
+  document.querySelector("#cancelFigureButton").addEventListener("click", closeFigureDialog);
+  elements.figureDialog.addEventListener("close", () => {
+    state.figureAnchor = null;
   });
   document.querySelector("#selectRecommendedGitFiles").addEventListener("change", (event) => {
     elements.gitPushList.querySelectorAll('input[data-recommended="true"]').forEach((input) => {
@@ -4222,6 +4805,7 @@ function bindEvents() {
     }
   });
   elements.saveSourceButton.addEventListener("click", () => saveSourceFile());
+  elements.createTexFileButton.addEventListener("click", createTexFile);
   elements.modularizeButton.addEventListener("click", previewPaperStructure);
   elements.structureForm.addEventListener("submit", applyPaperStructure);
   elements.migrateBibliographyButton.addEventListener("click", migrateBibliographyForStructure);
