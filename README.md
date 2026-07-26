@@ -18,7 +18,7 @@ PaperBridge 不代替作者决定论文内容。它用于保持中文修改、�
 
 ## 安装
 
-Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.0 Windows 安装程序](https://github.com/liyunjie-phd/PaperBridge/releases/download/v0.4.0/PaperBridge-Setup.exe)。
+Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.0 Windows 安装程序](https://github.com/liyunjie-phd/PaperBridge/releases/tag/v0.4.1-slim)。
 
 安装程序包含 PaperBridge、Git 和 Tectonic，不需要另行安装 Node.js。电脑已经安装 TeX Live 或 MiKTeX，并且可以使用 `latexmk` 时，PaperBridge 会优先使用本机 LaTeX；否则自动使用内置 Tectonic。
 
