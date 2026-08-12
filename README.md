@@ -8,7 +8,6 @@ PaperBridge 不代替作者决定论文内容。它用于保持中文修改、�
 
 ![PaperBridge 中英文对照编辑与 PDF 排版预览](docs/images/paperbridge-overview.png)
 
-> 示意图使用单独授权的模板项目。
 
 ## 主要功能
 
