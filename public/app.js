@@ -3,6 +3,29 @@ import * as pdfjsLib from "/vendor/pdfjs/pdf.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.mjs";
 
 const MAX_TERMINOLOGY_ENTRIES = 48;
+const MAX_PARALLEL_SEGMENT_TRANSLATIONS = 6;
+const CITATION_DRAG_TYPE = "application/x-paperbridge-citation";
+const UNDO_TRACKED_URLS = new Set([
+  "/api/format/apply",
+  "/api/project/bibliography/migrate",
+  "/api/references/add",
+  "/api/project/modularize/apply",
+  "/api/source/create",
+  "/api/source",
+  "/api/math-block",
+  "/api/math-block/move",
+  "/api/table-block",
+  "/api/figure/insert",
+  "/api/segment/chinese",
+  "/api/segment/translate",
+  "/api/segment/add",
+  "/api/segment/delete",
+  "/api/segment/comment",
+  "/api/segment/english",
+  "/api/file/terminology",
+  "/api/file/translate-to-chinese",
+  "/api/file/terminology/apply"
+]);
 const FAST_PREVIEW_SECTION_PATTERN = /^\\(chapter|section|subsection|subsubsection|paragraph|subparagraph)\b/;
 const FAST_PREVIEW_BEGIN_END_PATTERN = /^\\(begin|end)\{/;
 const FAST_PREVIEW_GROUPED_ENVS = new Set([
@@ -27,6 +50,9 @@ const state = {
   warnings: [],
   mode: "edit",
   saveTimers: new Map(),
+  pendingWrites: 0,
+  undoCount: 0,
+  undoLabel: "",
   previewMode: "fast",
   fastPreviewFile: "",
   fastPreviewCache: [],
@@ -46,10 +72,13 @@ const state = {
   pendingPdfResizeAnchor: null,
   pdfParagraphIndex: null,
   pdfParagraphIndexPromise: null,
+  pdfCaptionIndex: null,
+  pdfCaptionIndexPromise: null,
   pdfSourceIndex: null,
   pdfSourceIndexPromise: null,
   pdfNavigationToken: 0,
   pdfNavigationBusy: false,
+  pdfExportToken: 0,
   buildPreviewAvailable: null,
   formatFiles: [],
   formatJob: null,
@@ -63,7 +92,18 @@ const state = {
   paragraphAnchor: null,
   figureAnchor: null,
   gitPushResolver: null,
+  gitConflictResolver: null,
+  gitManagement: null,
+  gitManagementProject: null,
+  gitManagementToken: 0,
+  gitRemoteName: "",
   currentSectionId: null,
+  fileTranslationJobs: new Map(),
+  segmentTranslationJobs: new Map(),
+  segmentTranslationQueue: [],
+  activeSegmentTranslations: 0,
+  lastFileTranslationProgress: null,
+  visibleTranslationJobFile: "",
   mainTexResolver: null,
   sourceFile: null,
   sourceHash: "",
@@ -73,6 +113,10 @@ const state = {
   sourceSearchQuery: "",
   sourceSearchMatches: [],
   sourceSearchIndex: -1,
+  sourceHighlightTimer: 0,
+  references: null,
+  selectedReferenceKey: "",
+  citationTarget: null,
   structurePreview: null,
   formatPreflightPreview: null,
   formatPreflightResolver: null,
@@ -90,6 +134,10 @@ const elements = {
   sidebar: document.querySelector(".sidebar"),
   projectName: document.querySelector("#projectName"),
   syncState: document.querySelector("#syncState"),
+  undoButton: document.querySelector("#undoButton"),
+  undoCount: document.querySelector("#undoCount"),
+  gitRemoteTarget: document.querySelector("#gitRemoteTarget"),
+  gitRemoteSelect: document.querySelector("#gitRemoteSelect"),
   sidebarProjectList: document.querySelector("#sidebarProjectList"),
   documentCount: document.querySelector("#documentCount"),
   documentList: document.querySelector("#documentList"),
@@ -114,6 +162,7 @@ const elements = {
   previewPanel: document.querySelector(".preview-panel"),
   previewModeLabel: document.querySelector("#previewModeLabel"),
   previewCompileButton: document.querySelector("#previewCompileButton"),
+  exportPdfButton: document.querySelector("#exportPdfButton"),
   visiblePage: document.querySelector("#visiblePage"),
   pdfZoomValue: document.querySelector("#pdfZoomValue"),
   zoomOutButton: document.querySelector("#zoomOutButton"),
@@ -139,10 +188,15 @@ const elements = {
   sourceSearchCount: null,
   sourceSearchPreviousButton: null,
   sourceSearchNextButton: null,
-  reviewView: document.querySelector("#reviewView"),
-  reviewMeta: document.querySelector("#reviewMeta"),
-  reviewSummary: document.querySelector("#reviewSummary"),
-  reviewList: document.querySelector("#reviewList"),
+  referencesView: document.querySelector("#referencesView"),
+  referencesMeta: document.querySelector("#referencesMeta"),
+  referencesSearch: document.querySelector("#referencesSearch"),
+  referencesAlerts: document.querySelector("#referencesAlerts"),
+  referencesList: document.querySelector("#referencesList"),
+  referenceDetail: document.querySelector("#referenceDetail"),
+  refreshReferencesButton: document.querySelector("#refreshReferencesButton"),
+  insertSelectedReferenceButton: document.querySelector("#insertSelectedReferenceButton"),
+  closeReferencesButton: document.querySelector("#closeReferencesButton"),
   formatView: document.querySelector("#formatView"),
   formatMeta: document.querySelector("#formatMeta"),
   formatRequirements: document.querySelector("#formatRequirements"),
@@ -175,9 +229,33 @@ const elements = {
   figureCaptionInput: document.querySelector("#figureCaptionInput"),
   figureLabelInput: document.querySelector("#figureLabelInput"),
   insertFigureSubmitButton: document.querySelector("#insertFigureSubmitButton"),
+  gitManagerDialog: document.querySelector("#gitManagerDialog"),
+  gitManagerProjectMeta: document.querySelector("#gitManagerProjectMeta"),
+  gitRemoteList: document.querySelector("#gitRemoteList"),
+  gitRemoteForm: document.querySelector("#gitRemoteForm"),
+  gitRemoteOriginalName: document.querySelector("#gitRemoteOriginalName"),
+  gitRemoteProvider: document.querySelector("#gitRemoteProvider"),
+  gitRemoteName: document.querySelector("#gitRemoteName"),
+  gitRemoteUrl: document.querySelector("#gitRemoteUrl"),
+  gitRemoteCredential: document.querySelector("#gitRemoteCredential"),
+  gitRemoteDefault: document.querySelector("#gitRemoteDefault"),
+  gitCredentialList: document.querySelector("#gitCredentialList"),
+  gitCredentialForm: document.querySelector("#gitCredentialForm"),
+  gitCredentialId: document.querySelector("#gitCredentialId"),
+  gitCredentialName: document.querySelector("#gitCredentialName"),
+  gitCredentialProvider: document.querySelector("#gitCredentialProvider"),
+  gitCredentialUsernameField: document.querySelector("#gitCredentialUsernameField"),
+  gitCredentialUsername: document.querySelector("#gitCredentialUsername"),
+  gitCredentialToken: document.querySelector("#gitCredentialToken"),
+  gitCredentialScope: document.querySelector("#gitCredentialScope"),
+  gitManagerStatus: document.querySelector("#gitManagerStatus"),
   gitPushDialog: document.querySelector("#gitPushDialog"),
   gitPushForm: document.querySelector("#gitPushForm"),
   gitPushList: document.querySelector("#gitPushList"),
+  gitConflictDialog: document.querySelector("#gitConflictDialog"),
+  gitConflictForm: document.querySelector("#gitConflictForm"),
+  gitConflictMeta: document.querySelector("#gitConflictMeta"),
+  gitConflictList: document.querySelector("#gitConflictList"),
   structureDialog: document.querySelector("#structureDialog"),
   structureForm: document.querySelector("#structureForm"),
   structureSummary: document.querySelector("#structureSummary"),
@@ -199,8 +277,26 @@ const elements = {
   terminologyEmpty: document.querySelector("#terminologyEmpty"),
   terminologyStatus: document.querySelector("#terminologyStatus"),
   regenerateTerminologyButton: document.querySelector("#regenerateTerminologyButton"),
+  applyTerminologyDefinitionsButton: document.querySelector("#applyTerminologyDefinitionsButton"),
   addTerminologyButton: document.querySelector("#addTerminologyButton"),
   saveTerminologyButton: document.querySelector("#saveTerminologyButton"),
+  referenceInsertDialog: document.querySelector("#referenceInsertDialog"),
+  referenceInsertForm: document.querySelector("#referenceInsertForm"),
+  referenceInsertMeta: document.querySelector("#referenceInsertMeta"),
+  referenceInsertSearch: document.querySelector("#referenceInsertSearch"),
+  referenceInsertList: document.querySelector("#referenceInsertList"),
+  referenceAddDialog: document.querySelector("#referenceAddDialog"),
+  referenceAddForm: document.querySelector("#referenceAddForm"),
+  referenceAddUrl: document.querySelector("#referenceAddUrl"),
+  referenceAddBibFile: document.querySelector("#referenceAddBibFile"),
+  referenceAddKey: document.querySelector("#referenceAddKey"),
+  referenceAddBib: document.querySelector("#referenceAddBib"),
+  referenceAddStatus: document.querySelector("#referenceAddStatus"),
+  referenceLookupButton: document.querySelector("#referenceLookupButton"),
+  referenceAddSubmitButton: document.querySelector("#addReferenceButtonSubmit"),
+  closeReferenceAddButton: document.querySelector("#closeReferenceAddButton"),
+  cancelReferenceAddButton: document.querySelector("#cancelReferenceAddButton"),
+  addReferenceButton: document.querySelector("#addReferenceButton"),
   toastRegion: document.querySelector("#toastRegion")
 };
 
@@ -352,6 +448,17 @@ function recentProjectTimeLabel(value) {
   return new Date(time).toLocaleDateString();
 }
 
+function projectGitServices(project) {
+  return [...new Set((project?.git?.remotes || [])
+    .map((remote) => String(remote.label || "").trim())
+    .filter(Boolean))];
+}
+
+function projectGitServiceText(project) {
+  const services = projectGitServices(project);
+  return services.length ? services.join(" + ") : "未连接 Git";
+}
+
 function renderRecentProjects(project) {
   const section = document.querySelector("#recentProjectsSection");
   const list = elements.recentProjectList;
@@ -376,7 +483,10 @@ function renderRecentProjects(project) {
       && currentMainTex === String(item.mainTex || "").toLowerCase();
     button.querySelector(".recent-project-main").textContent = `${item.name || "论文项目"} · ${item.mainTex}`;
     button.querySelector(".recent-project-path").textContent = item.projectRoot;
-    button.querySelector(".recent-project-meta").textContent = isCurrent ? "当前项目" : recentProjectTimeLabel(item.updatedAt);
+    button.querySelector(".recent-project-meta").textContent = [
+      isCurrent ? "当前项目" : recentProjectTimeLabel(item.updatedAt),
+      projectGitServiceText(item)
+    ].filter(Boolean).join(" · ");
     button.addEventListener("click", () => openRecentProject(item, button));
     list.append(button);
   }
@@ -385,7 +495,7 @@ function renderRecentProjects(project) {
 function renderSidebarProjectList(project = state.project) {
   const list = elements.sidebarProjectList;
   if (!list) return;
-  const projects = (project?.config?.recentProjects || []).slice(0, 6);
+  const projects = project?.config?.recentProjects || [];
   list.replaceChildren();
   if (!projects.length) {
     const empty = document.createElement("div");
@@ -397,23 +507,38 @@ function renderSidebarProjectList(project = state.project) {
   const currentRoot = String(project.config?.projectRoot || "").toLowerCase();
   const currentMainTex = String(project.config?.mainTex || "").toLowerCase();
   for (const item of projects) {
+    const row = document.createElement("div");
     const button = document.createElement("button");
+    const manageButton = document.createElement("button");
     const isCurrent = currentRoot === String(item.projectRoot || "").toLowerCase()
       && currentMainTex === String(item.mainTex || "").toLowerCase();
+    row.className = "project-switch-row";
     button.type = "button";
     button.className = `project-switch-button ${isCurrent ? "active" : ""}`;
     button.title = item.projectRoot || "";
     button.innerHTML = `
       <i data-lucide="${isCurrent ? "folder-open" : "folder"}"></i>
-      <span class="project-switch-name"></span>
-      <span class="project-switch-meta"></span>
+      <span class="project-switch-copy">
+        <span class="project-switch-name"></span>
+        <span class="project-git-services"></span>
+      </span>
     `;
     button.querySelector(".project-switch-name").textContent = item.name || fileLabel(item.projectRoot || "论文项目");
-    button.querySelector(".project-switch-meta").textContent = isCurrent ? "当前" : item.mainTex || recentProjectTimeLabel(item.updatedAt);
+    button.querySelector(".project-git-services").textContent = projectGitServiceText(item);
     button.addEventListener("click", () => {
       if (!isCurrent) void openRecentProject(item, button);
     });
-    list.append(button);
+    manageButton.type = "button";
+    manageButton.className = "project-git-manage-button";
+    manageButton.title = projectGitServices(item).length ? "管理 Git 远端" : "连接远端";
+    manageButton.setAttribute("aria-label", `${item.name || "论文项目"}：${manageButton.title}`);
+    manageButton.innerHTML = `
+      <i data-lucide="${projectGitServices(item).length ? "git-branch" : "link-2"}"></i>
+      <span>${projectGitServices(item).length ? "管理" : "连接远端"}</span>
+    `;
+    manageButton.addEventListener("click", () => void openGitManager(item));
+    row.append(button, manageButton);
+    list.append(row);
   }
   refreshIcons();
 }
@@ -441,6 +566,385 @@ async function openRecentProject(project, button) {
   }
 }
 
+function setGitManagerStatus(message = "", type = "") {
+  elements.gitManagerStatus.textContent = message;
+  elements.gitManagerStatus.className = `setup-message ${type}`.trim();
+}
+
+function gitManagerActionButton(icon, title, handler, className = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `icon-button small ${className}`.trim();
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.innerHTML = `<i data-lucide="${icon}"></i>`;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function gitServiceClass(label = "") {
+  const normalized = String(label).toLowerCase();
+  if (normalized.includes("overleaf")) return "overleaf";
+  if (normalized.includes("github")) return "github";
+  if (normalized.includes("gitlab")) return "gitlab";
+  return "git";
+}
+
+function renderGitCredentialOptions(provider = elements.gitRemoteProvider.value, selectedId = "") {
+  const profiles = (state.gitManagement?.credentialProfiles || [])
+    .filter((profile) => profile.provider === provider);
+  const options = [new Option("自动选择兼容凭据", "")];
+  for (const profile of profiles) {
+    const scope = profile.scope === "project" ? "当前项目" : "共享";
+    const token = profile.hasToken ? "已保存 Token" : "未保存 Token";
+    options.push(new Option(`${profile.name} · ${scope} · ${token}`, profile.id));
+  }
+  elements.gitRemoteCredential.replaceChildren(...options);
+  elements.gitRemoteCredential.value = profiles.some((profile) => profile.id === selectedId) ? selectedId : "";
+}
+
+function updateGitRemoteProviderForm({ preserveCredential = true } = {}) {
+  const provider = elements.gitRemoteProvider.value;
+  const currentCredential = preserveCredential ? elements.gitRemoteCredential.value : "";
+  if (provider === "overleaf") {
+    elements.gitRemoteName.value = "overleaf";
+    elements.gitRemoteName.readOnly = true;
+    elements.gitRemoteUrl.placeholder = "https://cn.overleaf.com/project/...";
+  } else {
+    if (!elements.gitRemoteName.value || elements.gitRemoteName.value === "overleaf") {
+      elements.gitRemoteName.value = "paperbridge";
+    }
+    elements.gitRemoteName.readOnly = false;
+    elements.gitRemoteUrl.placeholder = "https://github.com/owner/repository.git";
+  }
+  renderGitCredentialOptions(provider, currentCredential);
+}
+
+function updateGitCredentialProviderForm() {
+  const overleaf = elements.gitCredentialProvider.value === "overleaf";
+  elements.gitCredentialUsernameField.classList.toggle("hidden", overleaf);
+  elements.gitCredentialUsername.disabled = overleaf;
+  if (overleaf) elements.gitCredentialUsername.value = "git";
+}
+
+function hideGitRemoteForm() {
+  elements.gitRemoteForm.classList.add("hidden");
+  elements.gitRemoteForm.reset();
+  elements.gitRemoteOriginalName.value = "";
+}
+
+function showGitRemoteForm(remote = null) {
+  hideGitCredentialForm();
+  const provider = remote?.provider === "overleaf" ? "overleaf" : "git";
+  elements.gitRemoteForm.reset();
+  elements.gitRemoteOriginalName.value = remote?.name || "";
+  elements.gitRemoteProvider.value = provider;
+  elements.gitRemoteName.value = remote?.name || (provider === "overleaf" ? "overleaf" : "paperbridge");
+  elements.gitRemoteUrl.value = remote?.url || "";
+  elements.gitRemoteDefault.checked = remote ? remote.default === true : !(state.gitManagement?.remotes || []).length;
+  elements.gitRemoteForm.classList.remove("hidden");
+  updateGitRemoteProviderForm({ preserveCredential: false });
+  elements.gitRemoteCredential.value = remote?.credentialProfileId || "";
+  elements.gitRemoteUrl.focus();
+  elements.gitRemoteForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function hideGitCredentialForm() {
+  elements.gitCredentialForm.classList.add("hidden");
+  elements.gitCredentialForm.reset();
+  elements.gitCredentialId.value = "";
+  elements.gitCredentialProvider.disabled = false;
+  elements.gitCredentialScope.disabled = false;
+}
+
+function showGitCredentialForm(profile = null) {
+  hideGitRemoteForm();
+  elements.gitCredentialForm.reset();
+  elements.gitCredentialId.value = profile?.id || "";
+  elements.gitCredentialName.value = profile?.name || "";
+  elements.gitCredentialProvider.value = profile?.provider === "overleaf" ? "overleaf" : "git";
+  elements.gitCredentialUsername.value = profile?.username || "";
+  elements.gitCredentialScope.value = profile?.scope === "project" ? "project" : "shared";
+  elements.gitCredentialToken.value = "";
+  elements.gitCredentialToken.placeholder = profile?.hasToken ? "已保存，留空保持不变" : "输入访问 Token";
+  const legacy = ["saved-overleaf", "saved-git"].includes(profile?.id);
+  elements.gitCredentialProvider.disabled = legacy;
+  elements.gitCredentialScope.disabled = legacy;
+  elements.gitCredentialForm.classList.remove("hidden");
+  updateGitCredentialProviderForm();
+  elements.gitCredentialName.focus();
+  elements.gitCredentialForm.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderGitManager() {
+  const management = state.gitManagement;
+  elements.gitRemoteList.replaceChildren();
+  elements.gitCredentialList.replaceChildren();
+  if (!management) {
+    const loading = document.createElement("div");
+    loading.className = "git-manager-empty";
+    loading.textContent = "正在读取项目 Git 配置...";
+    elements.gitRemoteList.append(loading);
+    return;
+  }
+
+  if (!management.remotes.length) {
+    const empty = document.createElement("div");
+    empty.className = "git-manager-empty";
+    empty.textContent = "该项目尚未连接远端。点击“连接远端”即可为现有项目添加 GitHub、GitLab 或 Overleaf。";
+    elements.gitRemoteList.append(empty);
+  }
+  for (const remote of management.remotes) {
+    const row = document.createElement("div");
+    row.className = "git-manager-row git-remote-row";
+    const badge = document.createElement("span");
+    badge.className = `git-service-badge ${gitServiceClass(remote.label)}`;
+    badge.textContent = remote.label || "Git 远端";
+    const copy = document.createElement("div");
+    copy.className = "git-manager-row-copy";
+    const title = document.createElement("div");
+    title.className = "git-manager-row-title";
+    title.textContent = `${remote.repository || remote.name} · ${remote.name}`;
+    const meta = document.createElement("div");
+    meta.className = "git-manager-row-meta";
+    meta.textContent = `${remote.url} · 凭据：${remote.credentialName || "自动选择"}`;
+    copy.append(title, meta);
+    const stateNode = document.createElement("span");
+    stateNode.className = `git-default-state ${remote.default ? "active" : ""}`;
+    stateNode.textContent = remote.default ? "默认同步" : "非默认";
+    const actions = document.createElement("div");
+    actions.className = "git-manager-row-actions";
+    if (!remote.default) {
+      actions.append(gitManagerActionButton("star", "设为默认同步目标", (event) => void setDefaultGitRemote(remote, event.currentTarget)));
+    }
+    actions.append(
+      gitManagerActionButton("plug-zap", "测试连接", (event) => void testSavedGitRemote(remote, event.currentTarget)),
+      gitManagerActionButton("pencil", "修改远端", () => showGitRemoteForm(remote)),
+      gitManagerActionButton("trash-2", "删除远端", (event) => void deleteGitRemote(remote, event.currentTarget), "danger")
+    );
+    row.append(badge, copy, stateNode, actions);
+    elements.gitRemoteList.append(row);
+  }
+
+  if (!management.credentialProfiles.length) {
+    const empty = document.createElement("div");
+    empty.className = "git-manager-empty";
+    empty.textContent = "尚未保存凭据配置。公开仓库可不使用 Token；私有仓库和 Overleaf 需要凭据。";
+    elements.gitCredentialList.append(empty);
+  }
+  for (const profile of management.credentialProfiles) {
+    const row = document.createElement("div");
+    row.className = "git-manager-row git-credential-row";
+    const badge = document.createElement("span");
+    badge.className = `git-service-badge ${profile.provider === "overleaf" ? "overleaf" : "git"}`;
+    badge.textContent = profile.provider === "overleaf" ? "Overleaf" : "Git";
+    const copy = document.createElement("div");
+    copy.className = "git-manager-row-copy";
+    const title = document.createElement("div");
+    title.className = "git-manager-row-title";
+    title.textContent = profile.name;
+    const meta = document.createElement("div");
+    meta.className = "git-manager-row-meta";
+    const scope = profile.scope === "project" ? "仅当前项目" : "多个项目共用";
+    const token = profile.hasToken ? "Token 已保存" : "未保存 Token";
+    meta.textContent = [scope, profile.username ? `用户：${profile.username}` : "", token].filter(Boolean).join(" · ");
+    copy.append(title, meta);
+    const actions = document.createElement("div");
+    actions.className = "git-manager-row-actions";
+    actions.append(
+      gitManagerActionButton("pencil", "修改凭据", () => showGitCredentialForm(profile)),
+      gitManagerActionButton("trash-2", "删除凭据", (event) => void deleteGitCredential(profile, event.currentTarget), "danger")
+    );
+    row.append(badge, copy, actions);
+    elements.gitCredentialList.append(row);
+  }
+  refreshIcons();
+}
+
+async function openGitManager(project) {
+  const addRemoteButton = document.querySelector("#addGitRemoteButton");
+  const addCredentialButton = document.querySelector("#addGitCredentialButton");
+  const token = ++state.gitManagementToken;
+  state.gitManagementProject = project;
+  state.gitManagement = null;
+  elements.gitManagerProjectMeta.textContent = `${project.name || fileLabel(project.projectRoot || "论文项目")} · ${project.projectRoot}`;
+  hideGitRemoteForm();
+  hideGitCredentialForm();
+  setGitManagerStatus();
+  renderGitManager();
+  setBusy(addRemoteButton, true);
+  setBusy(addCredentialButton, true);
+  if (!elements.gitManagerDialog.open) elements.gitManagerDialog.showModal();
+  try {
+    const management = await api(`/api/projects/git?projectRoot=${encodeURIComponent(project.projectRoot)}`);
+    if (token !== state.gitManagementToken || !elements.gitManagerDialog.open) return;
+    state.gitManagement = management;
+    renderGitManager();
+    setBusy(addRemoteButton, false);
+    setBusy(addCredentialButton, false);
+  } catch (error) {
+    if (token !== state.gitManagementToken || !elements.gitManagerDialog.open) return;
+    setGitManagerStatus(`读取 Git 配置失败：${error.message}`, "error");
+  }
+}
+
+function closeGitManager() {
+  state.gitManagementToken += 1;
+  hideGitRemoteForm();
+  hideGitCredentialForm();
+  state.gitManagement = null;
+  state.gitManagementProject = null;
+  if (elements.gitManagerDialog.open) elements.gitManagerDialog.close();
+}
+
+function gitRemoteFormPayload() {
+  return {
+    projectRoot: state.gitManagement?.project?.projectRoot || state.gitManagementProject?.projectRoot || "",
+    originalName: elements.gitRemoteOriginalName.value,
+    provider: elements.gitRemoteProvider.value,
+    name: elements.gitRemoteName.value.trim(),
+    url: elements.gitRemoteUrl.value.trim(),
+    credentialProfileId: elements.gitRemoteCredential.value,
+    makeDefault: elements.gitRemoteDefault.checked
+  };
+}
+
+async function refreshAfterGitManagement(management, message) {
+  state.gitManagement = management;
+  hideGitRemoteForm();
+  hideGitCredentialForm();
+  renderGitManager();
+  setGitManagerStatus(message, "success");
+  try {
+    await refreshProject({ preserveDocument: true });
+  } catch (error) {
+    toast(`Git 配置已保存，但项目状态刷新失败：${error.message}`, "error", 5600);
+  }
+}
+
+async function testGitRemotePayload(payload, button) {
+  setBusy(button, true);
+  setGitManagerStatus("正在测试远端连接...");
+  try {
+    const result = await api("/api/projects/git/test", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    setGitManagerStatus(result.message || "远端连接成功。", "success");
+  } catch (error) {
+    setGitManagerStatus(`连接失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function testGitRemoteForm(event) {
+  if (!elements.gitRemoteForm.reportValidity()) return;
+  await testGitRemotePayload(gitRemoteFormPayload(), event.currentTarget);
+}
+
+async function testSavedGitRemote(remote, button) {
+  await testGitRemotePayload({
+    projectRoot: state.gitManagement.project.projectRoot,
+    provider: remote.provider,
+    name: remote.name,
+    url: remote.url,
+    credentialProfileId: remote.credentialProfileId || ""
+  }, button);
+}
+
+async function saveGitRemote(event) {
+  event.preventDefault();
+  if (!elements.gitRemoteForm.reportValidity()) return;
+  const button = document.querySelector("#saveGitRemoteButton");
+  setBusy(button, true);
+  setGitManagerStatus("正在测试并保存远端...");
+  try {
+    const management = await api("/api/projects/git/remote", {
+      method: "POST",
+      body: JSON.stringify(gitRemoteFormPayload())
+    });
+    await refreshAfterGitManagement(management, "远端已保存并通过连接测试。");
+  } catch (error) {
+    setGitManagerStatus(`远端保存失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function setDefaultGitRemote(remote, button) {
+  setBusy(button, true);
+  try {
+    const management = await api("/api/projects/git/default", {
+      method: "POST",
+      body: JSON.stringify({ projectRoot: state.gitManagement.project.projectRoot, remoteName: remote.name })
+    });
+    await refreshAfterGitManagement(management, `${remote.label} 已设为默认同步目标。`);
+  } catch (error) {
+    setGitManagerStatus(`设置默认远端失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function deleteGitRemote(remote, button) {
+  if (!window.confirm(`确定从该项目删除远端“${remote.name}”吗？\n\n不会删除远端仓库中的文件。`)) return;
+  setBusy(button, true);
+  try {
+    const management = await api("/api/projects/git/remote", {
+      method: "DELETE",
+      body: JSON.stringify({ projectRoot: state.gitManagement.project.projectRoot, remoteName: remote.name })
+    });
+    await refreshAfterGitManagement(management, `远端“${remote.name}”已删除。`);
+  } catch (error) {
+    setGitManagerStatus(`删除远端失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function saveGitCredential(event) {
+  event.preventDefault();
+  if (!elements.gitCredentialForm.reportValidity()) return;
+  const button = document.querySelector("#saveGitCredentialButton");
+  setBusy(button, true);
+  try {
+    const management = await api("/api/git/credentials", {
+      method: "POST",
+      body: JSON.stringify({
+        projectRoot: state.gitManagement.project.projectRoot,
+        id: elements.gitCredentialId.value,
+        name: elements.gitCredentialName.value.trim(),
+        provider: elements.gitCredentialProvider.value,
+        username: elements.gitCredentialUsername.value.trim(),
+        token: elements.gitCredentialToken.value.trim(),
+        scope: elements.gitCredentialScope.value
+      })
+    });
+    await refreshAfterGitManagement(management, "凭据配置已保存。Token 不会显示在页面中。");
+  } catch (error) {
+    setGitManagerStatus(`凭据保存失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function deleteGitCredential(profile, button) {
+  if (!window.confirm(`确定删除凭据“${profile.name}”吗？\n\n使用它的项目远端会改为自动选择其他可用凭据。`)) return;
+  setBusy(button, true);
+  try {
+    const management = await api("/api/git/credentials", {
+      method: "DELETE",
+      body: JSON.stringify({ projectRoot: state.gitManagement.project.projectRoot, id: profile.id })
+    });
+    await refreshAfterGitManagement(management, `凭据“${profile.name}”已删除。`);
+  } catch (error) {
+    setGitManagerStatus(`删除凭据失败：${error.message}`, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 function openSetup(project, { switching = false } = {}) {
   state.setupMode = switching ? "switch" : "initial";
   document.querySelector("#setupTitle").textContent = switching ? "添加或切换论文" : "开始使用 PaperBridge";
@@ -458,6 +962,7 @@ function openSetup(project, { switching = false } = {}) {
     || project.config?.suggestedStorageRoot
     || "";
   document.querySelector("#setupProjectUrl").value = "";
+  document.querySelector("#setupProjectName").value = switching ? (project.config?.projectName || "") : "";
   document.querySelector("#setupGitUrl").value = "";
   document.querySelector("#setupZipPath").value = "";
   document.querySelector("#setupLocalPath").value = "";
@@ -565,6 +1070,7 @@ async function submitSetup(event) {
   const translation = setupProviderProfile();
   const source = {
     mode,
+    name: document.querySelector("#setupProjectName").value.trim(),
     projectUrl: document.querySelector("#setupProjectUrl").value.trim(),
     token: document.querySelector("#setupOverleafToken").value.trim(),
     zipPath: document.querySelector("#setupZipPath").value.trim(),
@@ -598,7 +1104,7 @@ async function submitSetup(event) {
           : "",
         preserveProviders: state.setupMode === "switch",
         translation,
-        review: { ...translation }
+        format: { ...translation }
       })
     });
     elements.setupDialog.close();
@@ -900,6 +1406,8 @@ function invalidatePdfNavigationIndex() {
   state.pdfNavigationToken += 1;
   state.pdfParagraphIndex = null;
   state.pdfParagraphIndexPromise = null;
+  state.pdfCaptionIndex = null;
+  state.pdfCaptionIndexPromise = null;
   state.pdfSourceIndex = null;
   state.pdfSourceIndexPromise = null;
 }
@@ -932,7 +1440,8 @@ function normalizePdfNavigationText(value, { latex = false } = {}) {
 
 function navigationTokens(value, options) {
   const normalized = normalizePdfNavigationText(value, options);
-  return { normalized, tokens: normalized ? normalized.split(" ") : [] };
+  const tokens = normalized ? normalized.split(" ") : [];
+  return { normalized, tokens, tokenSet: new Set(tokens) };
 }
 
 function longestCommonTokenRun(left, right) {
@@ -954,8 +1463,8 @@ function longestCommonTokenRun(left, right) {
 
 function scoreNavigationText(query, candidate, selectedNormalized = "") {
   const run = longestCommonTokenRun(query.tokens, candidate.tokens);
-  const querySet = new Set(query.tokens);
-  const candidateSet = new Set(candidate.tokens);
+  const querySet = query.tokenSet || new Set(query.tokens);
+  const candidateSet = candidate.tokenSet || new Set(candidate.tokens);
   let overlap = 0;
   for (const token of querySet) if (candidateSet.has(token)) overlap += 1;
   const selectedExact = selectedNormalized.length >= 4 && candidate.normalized.includes(selectedNormalized);
@@ -967,15 +1476,83 @@ function scoreNavigationText(query, candidate, selectedNormalized = "") {
   };
 }
 
-function findBestNavigationMatch(queryText, selectedText, candidates, { source = false } = {}) {
+function shortTokenRunInText(tokens, normalizedText) {
+  if (!tokens?.length || !normalizedText) return 0;
+  const maxRun = Math.min(8, tokens.length);
+  for (let size = maxRun; size >= 3; size -= 1) {
+    for (let index = 0; index + size <= tokens.length; index += 1) {
+      if (normalizedText.includes(tokens.slice(index, index + size).join(" "))) return size;
+    }
+  }
+  return 0;
+}
+
+function pdfPageRatio(page, pageCount) {
+  const normalizedPage = Number(page);
+  const normalizedPageCount = Number(pageCount);
+  if (!Number.isFinite(normalizedPage) || !Number.isFinite(normalizedPageCount) || normalizedPageCount <= 1) return null;
+  return Math.min(1, Math.max(0, (normalizedPage - 1) / (normalizedPageCount - 1)));
+}
+
+function candidatePositionRatio(candidate) {
+  const explicit = Number(candidate.positionRatio);
+  if (Number.isFinite(explicit)) return Math.min(1, Math.max(0, explicit));
+  return null;
+}
+
+function scoreNavigationPageEvidence(candidate, pageTokens) {
+  if (!pageTokens?.tokens?.length) {
+    return { pageRun: 0, pageOverlap: 0, pageOverlapRatio: 0, pageBoost: 0, pagePenalty: 0 };
+  }
+  const pageSet = pageTokens.tokenSet || new Set(pageTokens.tokens);
+  const candidateSet = candidate.tokenSet || new Set(candidate.tokens);
+  let pageOverlap = 0;
+  for (const token of candidateSet) if (pageSet.has(token)) pageOverlap += 1;
+  const denominator = Math.max(1, Math.min(candidateSet.size, 24));
+  const pageRun = pageOverlap >= 3 ? shortTokenRunInText(candidate.tokens, pageTokens.normalized) : 0;
+  const pageOverlapRatio = pageOverlap / denominator;
+  const pageBoost = Math.min(24, pageRun * 2 + Math.min(10, pageOverlap) + (pageOverlapRatio >= 0.42 ? 8 : 0));
+  const pagePenalty = pageTokens.tokens.length >= 24 && pageRun < 3 && pageOverlap < 4 ? 16 : 0;
+  return {
+    pageRun,
+    pageOverlap,
+    pageOverlapRatio,
+    pageBoost,
+    pagePenalty
+  };
+}
+
+function scoreNavigationPosition(candidate, { page = 0, pageCount = 0 } = {}) {
+  const pagePosition = pdfPageRatio(page, pageCount);
+  const sourcePosition = candidatePositionRatio(candidate);
+  if (pagePosition === null || sourcePosition === null) return { positionDistance: null, positionBoost: 0, positionPenalty: 0 };
+  const distance = Math.abs(pagePosition - sourcePosition);
+  let positionBoost = distance <= 0.16 ? 8 : 0;
+  let positionPenalty = distance <= 0.22 ? 0 : Math.round((distance - 0.22) * 46);
+  if (Number(page) <= 2 && sourcePosition >= 0.58) positionPenalty += 18;
+  if (Number(page) >= Number(pageCount) - 1 && sourcePosition <= 0.42) positionPenalty += 18;
+  return { positionDistance: distance, positionBoost, positionPenalty };
+}
+
+function findBestNavigationMatch(queryText, selectedText, candidates, { source = false, caption = false, page = 0, pageCount = 0, pageText = "" } = {}) {
   const query = navigationTokens(queryText);
   const selectedNormalized = normalizePdfNavigationText(selectedText);
+  const pageTokens = navigationTokens(pageText);
   if (query.tokens.length < 2) return null;
   let best = null;
   let runnerUp = null;
   for (const candidate of candidates) {
     const metrics = scoreNavigationText(query, candidate, selectedNormalized);
-    const result = { ...candidate, ...metrics };
+    const pageEvidence = scoreNavigationPageEvidence(candidate, pageTokens);
+    const position = scoreNavigationPosition(candidate, { page, pageCount });
+    const result = {
+      ...candidate,
+      ...metrics,
+      ...pageEvidence,
+      ...position,
+      baseScore: metrics.score,
+      score: metrics.score + pageEvidence.pageBoost + position.positionBoost - pageEvidence.pagePenalty - position.positionPenalty
+    };
     if (!best || result.score > best.score) {
       runnerUp = best;
       best = result;
@@ -984,14 +1561,22 @@ function findBestNavigationMatch(queryText, selectedText, candidates, { source =
     }
   }
   if (!best) return null;
-  const overlapRatio = best.overlap / Math.max(1, Math.min(new Set(query.tokens).size, 12));
-  const reliable = best.run >= (source ? 4 : 5)
+  const querySize = new Set(query.tokens).size;
+  const overlapRatio = best.overlap / Math.max(1, Math.min(querySize, 12));
+  const captionReliable = caption && (
+    (best.selectedExact && best.overlap >= Math.min(3, querySize))
+    || best.run >= 3
+    || (best.run >= 2 && best.overlap >= 4)
+  );
+  const reliable = captionReliable
+    || best.run >= (source ? 4 : 5)
     || (best.run >= 3 && best.overlap >= 5 && overlapRatio >= 0.45)
+    || (best.pageRun >= 5 && best.pageOverlap >= 6 && best.run >= 2)
     || (best.selectedExact && best.run >= 3);
   if (!reliable) return null;
   const competingLocation = !source
     || (runnerUp && (runnerUp.file !== best.file || Math.abs((runnerUp.line || 0) - (best.line || 0)) > 10));
-  if (best.run < 6 && runnerUp && competingLocation && best.score - runnerUp.score < 2) return null;
+  if (!caption && best.run < 6 && runnerUp && competingLocation && best.score - runnerUp.score < 2) return null;
   return best;
 }
 
@@ -1003,18 +1588,119 @@ async function getPdfParagraphIndex() {
   const promise = Promise.all(files.map((file) => api(`/api/document?file=${encodeURIComponent(file)}`)))
     .then((documents) => {
       if (token !== state.pdfNavigationToken) return [];
-      state.pdfParagraphIndex = documents.flatMap((documentPayload) => documentPayload.segments.map((segment) => ({
+      const entries = documents.flatMap((documentPayload) => documentPayload.segments.map((segment) => ({
         file: documentPayload.file,
         index: segment.index,
         id: segment.id,
+        startLine: segment.startLine,
+        endLine: segment.endLine,
+        sectionIndex: segment.sectionIndex,
         ...navigationTokens(segment.plainText || segment.english, { latex: !segment.plainText })
       }))).filter((entry) => entry.tokens.length);
+      const denominator = Math.max(1, entries.length - 1);
+      state.pdfParagraphIndex = entries.map((entry, index) => ({
+        ...entry,
+        positionRatio: entries.length <= 1 ? 0 : index / denominator
+      }));
       return state.pdfParagraphIndex;
     })
     .finally(() => {
       if (state.pdfParagraphIndexPromise === promise) state.pdfParagraphIndexPromise = null;
     });
   state.pdfParagraphIndexPromise = promise;
+  return promise;
+}
+
+function skipLatexBalancedArgument(text, cursor, open, close) {
+  if (text[cursor] !== open) return null;
+  let depth = 0;
+  for (let index = cursor; index < text.length; index += 1) {
+    const char = text[index];
+    const escaped = index > 0 && text[index - 1] === "\\";
+    if (char === open && !escaped) depth += 1;
+    else if (char === close && !escaped) {
+      depth -= 1;
+      if (depth === 0) return { start: cursor, end: index + 1 };
+    }
+  }
+  return null;
+}
+
+function latexLineAtOffset(lineStarts, offset) {
+  let left = 0;
+  let right = lineStarts.length - 1;
+  while (left <= right) {
+    const middle = Math.floor((left + right) / 2);
+    if (lineStarts[middle] <= offset) left = middle + 1;
+    else right = middle - 1;
+  }
+  return Math.max(1, right + 1);
+}
+
+function latexLineStarts(content) {
+  const starts = [0];
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === "\n") starts.push(index + 1);
+  }
+  return starts;
+}
+
+function extractLatexCaptions(source) {
+  const content = String(source.content || "");
+  const lines = content.split(/\r?\n/);
+  const lineStarts = latexLineStarts(content);
+  const captions = [];
+  const commandPattern = /\\caption(?![A-Za-z@])/g;
+  for (const match of content.matchAll(commandPattern)) {
+    let cursor = match.index + match[0].length;
+    while (/\s/.test(content[cursor] || "")) cursor += 1;
+    if (content[cursor] === "[") {
+      const optional = skipLatexBalancedArgument(content, cursor, "[", "]");
+      if (!optional) continue;
+      cursor = optional.end;
+      while (/\s/.test(content[cursor] || "")) cursor += 1;
+    }
+    const required = skipLatexBalancedArgument(content, cursor, "{", "}");
+    if (!required) continue;
+    const caption = content.slice(required.start + 1, required.end - 1);
+    const line = latexLineAtOffset(lineStarts, match.index);
+    const sourceStart = Math.max(0, line - 4);
+    const sourceEnd = Math.min(lines.length, line + 5);
+    const before = content.slice(Math.max(0, match.index - 1000), match.index);
+    const beginMatches = [...before.matchAll(/\\begin\s*\{(figure\*?|table\*?)\}/g)];
+    const env = beginMatches.at(-1)?.[1] || "figure";
+    const after = content.slice(required.end, required.end + 700);
+    const label = after.match(/\\label\s*\{([^{}]+)\}/)?.[1] || "";
+    const tokens = navigationTokens(caption, { latex: true });
+    if (tokens.tokens.length < 2) continue;
+    captions.push({
+      file: source.file,
+      line,
+      env,
+      label,
+      caption,
+      sourceLines: lines.slice(sourceStart, sourceEnd).map((text, offset) => ({ line: sourceStart + offset + 1, text })),
+      ...tokens
+    });
+  }
+  return captions;
+}
+
+async function getPdfCaptionIndex() {
+  if (state.pdfCaptionIndex) return state.pdfCaptionIndex;
+  if (state.pdfCaptionIndexPromise) return state.pdfCaptionIndexPromise;
+  const token = state.pdfNavigationToken;
+  const files = (state.project?.texFiles || []).filter((file) => file.toLowerCase().endsWith(".tex"));
+  const promise = Promise.all(files.map((file) => api(`/api/source?file=${encodeURIComponent(file)}`)))
+    .then((sources) => {
+      if (token !== state.pdfNavigationToken) return [];
+      state.pdfCaptionIndex = sources.flatMap(extractLatexCaptions);
+      return state.pdfCaptionIndex;
+    })
+    .finally(() => {
+      if (state.pdfCaptionIndexPromise === promise) state.pdfCaptionIndexPromise = null;
+    });
+  state.pdfCaptionIndexPromise = promise;
   return promise;
 }
 
@@ -1026,7 +1712,7 @@ async function getPdfSourceIndex() {
   const promise = Promise.all(files.map((file) => api(`/api/source?file=${encodeURIComponent(file)}`)))
     .then((sources) => {
       if (token !== state.pdfNavigationToken) return [];
-      state.pdfSourceIndex = sources.flatMap((source) => {
+      const entries = sources.flatMap((source) => {
         const lines = source.content.split(/\r?\n/);
         return lines.map((_line, index) => {
           const start = Math.max(0, index - 3);
@@ -1039,6 +1725,11 @@ async function getPdfSourceIndex() {
           };
         });
       }).filter((entry) => entry.tokens.length);
+      const denominator = Math.max(1, entries.length - 1);
+      state.pdfSourceIndex = entries.map((entry, index) => ({
+        ...entry,
+        positionRatio: entries.length <= 1 ? 0 : index / denominator
+      }));
       return state.pdfSourceIndex;
     })
     .finally(() => {
@@ -1071,6 +1762,8 @@ function extractPdfNavigationQuery(event) {
   if (index < 0) return null;
   const items = textLayer.task.textContentItemsStr;
   const divs = textLayer.task.textDivs;
+  const page = Number(shell.dataset.page || canvas.dataset.page || 0);
+  const pageCount = Number(state.pdfDocument?.numPages || state.project?.pdf?.pages || 0);
   let start = index;
   let end = index + 1;
   const sameTextBlock = (before, after) => {
@@ -1084,7 +1777,13 @@ function extractPdfNavigationQuery(event) {
   while (start > 0 && index - start < 8 && sameTextBlock(divs[start - 1], divs[start])) start -= 1;
   while (end < items.length && end - index < 9 && sameTextBlock(divs[end - 1], divs[end])) end += 1;
   const context = items.slice(start, end).filter(Boolean).join(" ");
-  return { selectedText, context: context || selectedText };
+  return {
+    selectedText,
+    context: context || selectedText,
+    page,
+    pageCount,
+    pageText: items.filter(Boolean).join(" ")
+  };
 }
 
 function highlightLocatedSegment(file, index) {
@@ -1126,7 +1825,23 @@ async function locatePdfSelection(event) {
   state.pdfNavigationBusy = true;
   elements.pdfScroll.classList.add("locating");
   try {
-    const paragraph = findBestNavigationMatch(query.context, query.selectedText, await getPdfParagraphIndex());
+    const navigationScope = {
+      page: query.page,
+      pageCount: query.pageCount,
+      pageText: query.pageText
+    };
+    const caption = findBestNavigationMatch(query.context, query.selectedText, await getPdfCaptionIndex(), {
+      ...navigationScope,
+      source: true,
+      caption: true
+    });
+    if (caption && await openSourceLocation(caption.file, caption.line)) {
+      elements.pdfScroll.dataset.navigationState = "caption";
+      toast(`已定位到${caption.env?.startsWith("table") ? "表格" : "图片"} caption 源码。`, "success", 3200);
+      return;
+    }
+
+    const paragraph = findBestNavigationMatch(query.context, query.selectedText, await getPdfParagraphIndex(), navigationScope);
     if (paragraph) {
       if (state.mode !== "edit" && !setMode("edit", { loadCurrent: false })) return;
       if (state.currentDocument?.file !== paragraph.file) await loadDocument(paragraph.file);
@@ -1137,7 +1852,7 @@ async function locatePdfSelection(event) {
       }
     }
 
-    const source = findBestNavigationMatch(query.context, query.selectedText, await getPdfSourceIndex(), { source: true });
+    const source = findBestNavigationMatch(query.context, query.selectedText, await getPdfSourceIndex(), { ...navigationScope, source: true });
     if (source) {
       const queryTokens = navigationTokens(query.context);
       const selectedNormalized = normalizePdfNavigationText(query.selectedText);
@@ -1214,18 +1929,52 @@ async function locateFastPreviewSelection(event) {
 }
 
 async function api(url, options = {}) {
-  const response = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.error || `Request failed: ${response.status}`);
-    error.payload = payload;
-    error.status = response.status;
-    throw error;
+  const trackedWrite = UNDO_TRACKED_URLS.has(url) && !["GET", "HEAD"].includes(String(options.method || "GET").toUpperCase());
+  if (trackedWrite) state.pendingWrites += 1;
+  try {
+    const response = await fetch(url, {
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      ...options
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(payload.error || `Request failed: ${response.status}`);
+      error.payload = payload;
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  } finally {
+    if (trackedWrite) {
+      state.pendingWrites = Math.max(0, state.pendingWrites - 1);
+      void refreshUndoStatus();
+    }
   }
-  return payload;
+}
+
+function applyUndoStatus(status = {}) {
+  state.undoCount = Math.max(0, Number(status.count || 0));
+  state.undoLabel = String(status.nextLabel || "");
+  if (state.project) state.project.undo = { ...status, count: state.undoCount, nextLabel: state.undoLabel };
+  elements.undoButton.disabled = state.undoCount === 0;
+  elements.undoButton.title = state.undoCount
+    ? `撤销：${state.undoLabel || "上一步操作"}（${state.undoCount}/10）`
+    : "没有可撤销的操作";
+  elements.undoCount.textContent = String(state.undoCount);
+  elements.undoCount.classList.toggle("hidden", state.undoCount === 0);
+}
+
+async function refreshUndoStatus() {
+  try {
+    const response = await fetch("/api/undo/status");
+    if (!response.ok) return null;
+    const status = await response.json();
+    applyUndoStatus(status);
+    return status;
+  } catch {
+    // The next project refresh will restore the status if the local server is restarting.
+    return null;
+  }
 }
 
 function toast(message, type = "success", timeout = 3600) {
@@ -1296,27 +2045,34 @@ function statusLabel(status) {
 
 function updateProjectHeader() {
   const config = state.project.config;
-  elements.projectName.textContent = `${config.mainTex} · ${config.projectRoot}`;
+  applyUndoStatus(state.project.undo || {});
+  elements.projectName.textContent = `${config.projectName || fileLabel(config.projectRoot || "论文项目")} · ${config.mainTex} · ${config.projectRoot}`;
   const git = state.project.git;
+  const remotes = Array.isArray(git.remotes) ? git.remotes : [];
+  state.gitRemoteName = git.remoteName || "";
   const hasRemote = Boolean(git.remoteName);
-  const remoteLabel = git.overleaf
-    ? "Overleaf"
-    : git.remoteUrl
-      ? (() => {
-          try {
-            const host = new URL(git.remoteUrl).hostname.toLowerCase();
-            if (host.includes("github")) return "GitHub";
-            if (host.includes("gitlab")) return "GitLab";
-          } catch {
-            // Use a generic label for non-HTTP test or local remotes.
-          }
-          return "Git 远端";
-        })()
-      : "Git 远端";
-  document.querySelector("#pullButton").disabled = !hasRemote;
-  document.querySelector("#pushButton").disabled = !hasRemote;
-  document.querySelector("#pullButton").title = `从 ${remoteLabel} 拉取最新版本`;
-  document.querySelector("#pushButton").title = `编译、提交并推送至 ${remoteLabel}`;
+  const remoteLabel = git.remoteLabel || (git.overleaf ? "Overleaf" : "Git 远端");
+  const remoteTargetLabel = git.remoteRepository ? `${remoteLabel} · ${git.remoteRepository}` : remoteLabel;
+  elements.gitRemoteSelect.replaceChildren(...remotes.map((remote) => {
+    const option = document.createElement("option");
+    option.value = remote.name;
+    option.textContent = remote.repository ? `${remote.label} · ${remote.repository}` : remote.label;
+    option.selected = remote.name === git.remoteName;
+    return option;
+  }));
+  elements.gitRemoteTarget.classList.toggle("hidden", !hasRemote);
+  elements.gitRemoteSelect.disabled = remotes.length < 2;
+  elements.gitRemoteTarget.title = remotes.length > 1
+    ? "选择本次拉取和推送的目标仓库"
+    : `当前同步目标：${remoteTargetLabel}`;
+  const pullButton = document.querySelector("#pullButton");
+  const pushButton = document.querySelector("#pushButton");
+  pullButton.disabled = !hasRemote;
+  pushButton.disabled = !hasRemote;
+  pullButton.querySelector("span").textContent = hasRemote ? `拉取 ${remoteLabel}` : "拉取";
+  pushButton.querySelector("span").textContent = hasRemote ? `推送 ${remoteLabel}` : "推送";
+  pullButton.title = hasRemote ? `从 ${remoteTargetLabel} 拉取最新版本` : "当前项目没有连接 Git 远端仓库";
+  pushButton.title = hasRemote ? `提交并推送至 ${remoteTargetLabel}` : "当前项目没有连接 Git 远端仓库";
   elements.syncState.className = `sync-state ${git.available ? (git.dirty ? "dirty" : "clean") : "error"}`;
   let syncText = "未连接 Git";
   if (git.available && !hasRemote) syncText = "本地 Git，未连接远端";
@@ -1326,6 +2082,90 @@ function updateProjectHeader() {
   else if (hasRemote) syncText = `已与 ${remoteLabel} 对齐`;
   elements.syncState.querySelector("span:last-child").textContent = syncText;
   renderSidebarProjectList(state.project);
+}
+
+async function undoLastChange() {
+  if (state.sourceDirty) {
+    toast("TeX 源码还有未保存修改，请先按 Ctrl+S 保存或在编辑器内撤销。", "warning", 5200);
+    return false;
+  }
+  setBusy(elements.undoButton, true);
+  try {
+    const currentFile = state.currentFile;
+    const result = await api("/api/undo", { method: "POST", body: "{}" });
+    applyUndoStatus(result.history || {});
+    if (!result.changed) {
+      toast("没有可撤销的操作。", "warning", 2800);
+      return false;
+    }
+    state.currentDocument = null;
+    await applyProjectPayload(result.project, { preserveDocument: true });
+    const nextFile = result.project.documents?.some((item) => item.file === currentFile)
+      ? currentFile
+      : result.project.documents?.[0]?.file;
+    if (nextFile) await loadDocument(nextFile);
+    if (state.mode === "source") {
+      renderSourceFileOptions(state.sourceFile || nextFile);
+      if (elements.sourceFileSelect.value) await loadSourceFile(elements.sourceFileSelect.value, { force: true });
+    }
+    invalidateReferences();
+    scheduleFastPreview(nextFile || result.project.config?.mainTex || "", 0);
+    toast(`已撤销：${result.label || "上一步操作"}。`, "success", 3600);
+    return true;
+  } catch (error) {
+    toast(`撤销失败：${error.message}`, "error", 5600);
+    return false;
+  } finally {
+    setBusy(elements.undoButton, false);
+    applyUndoStatus(state.project?.undo || { count: state.undoCount, nextLabel: state.undoLabel });
+  }
+}
+
+async function waitForPendingSaves(timeoutMs = 70_000) {
+  const started = Date.now();
+  while (
+    state.saveTimers.size
+    || state.pendingWrites
+    || state.fileTranslationJobs.size
+    || state.segmentTranslationQueue.length
+    || state.activeSegmentTranslations
+  ) {
+    if (Date.now() - started >= timeoutMs) return false;
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+  }
+  return true;
+}
+
+async function handleDesktopCloseRequest(save) {
+  if (!await refreshUndoStatus()) {
+    return { ok: false, message: "无法确认论文的保存状态，请稍后再退出。" };
+  }
+  const backgroundJobs = state.fileTranslationJobs.size > 0
+    || state.segmentTranslationQueue.length > 0
+    || state.activeSegmentTranslations > 0;
+  const dirty = state.sourceDirty
+    || state.terminologyDirty
+    || state.saveTimers.size > 0
+    || state.pendingWrites > 0
+    || backgroundJobs
+    || state.undoCount > 0;
+  if (!save) return { ok: true, dirty, undoCount: state.undoCount };
+  if (state.sourceDirty && !await saveSourceFile({ quiet: true, refreshPreview: false })) {
+    return { ok: false, message: "TeX 源码保存失败，窗口没有关闭。" };
+  }
+  if (state.terminologyDirty && !await saveTerminology({ quiet: true })) {
+    return { ok: false, message: "术语表保存失败，窗口没有关闭。" };
+  }
+  if (!await waitForPendingSaves()) {
+    return { ok: false, message: "仍有翻译或保存任务未完成，请稍后再退出。" };
+  }
+  try {
+    const status = await api("/api/undo/commit", { method: "POST", body: "{}" });
+    applyUndoStatus(status);
+    return { ok: true, dirty: false, undoCount: 0 };
+  } catch (error) {
+    return { ok: false, message: `无法确认保存状态：${error.message}` };
+  }
 }
 
 function updateTranslationProgress() {
@@ -1354,18 +2194,66 @@ function hideFileTranslationProgress() {
   elements.fileTranslationProgressTrack.setAttribute("aria-valuenow", "0");
 }
 
+function updateTranslateFileButton() {
+  const button = document.querySelector("#translateFileButton");
+  if (!button) return;
+  const job = state.currentFile ? state.fileTranslationJobs.get(state.currentFile) : null;
+  const label = button.querySelector("span");
+  button.disabled = !state.currentFile || !state.currentDocument;
+  button.classList.toggle("busy", Boolean(job));
+  if (label) label.textContent = job ? "当前 TeX 翻译中" : "翻译当前 TeX";
+}
+
+function renderFileTranslationProgress(preferredFile = state.visibleTranslationJobFile || state.currentFile) {
+  let job = preferredFile ? state.fileTranslationJobs.get(preferredFile) : null;
+  if (!job && state.currentFile) job = state.fileTranslationJobs.get(state.currentFile);
+  if (!job) job = [...state.fileTranslationJobs.values()][0] || null;
+  if (!job && state.lastFileTranslationProgress?.file === preferredFile) job = state.lastFileTranslationProgress;
+  if (!job) {
+    hideFileTranslationProgress();
+    updateTranslateFileButton();
+    return;
+  }
+  state.visibleTranslationJobFile = job.file;
+  setFileTranslationProgress(job.completed, job.total, job.label, job.statusClass || "");
+  updateTranslateFileButton();
+}
+
+function finishFileTranslationJob(file, updates = {}) {
+  const job = state.fileTranslationJobs.get(file);
+  if (!job) return;
+  Object.assign(job, updates);
+  state.lastFileTranslationProgress = { ...job };
+  state.fileTranslationJobs.delete(file);
+  renderFileTranslationProgress(file);
+  window.setTimeout(() => {
+    if (
+      state.lastFileTranslationProgress?.file === file
+      && !state.fileTranslationJobs.has(file)
+      && state.visibleTranslationJobFile === file
+    ) {
+      state.lastFileTranslationProgress = null;
+      renderFileTranslationProgress();
+    }
+  }, 7000);
+}
+
 function normalizeTerminologyEntry(entry = {}) {
   return {
     chinese: String(entry.chinese || "").trim(),
     english: String(entry.english || entry.en || entry.term || "").trim(),
+    fullName: String(entry.fullName || entry.full || entry.definition || "").trim(),
     keepEnglish: entry.keepEnglish === true,
-    note: String(entry.note || "").trim()
+    note: String(entry.note || "").trim(),
+    frequency: Math.max(0, Number(entry.frequency || 0) || 0),
+    firstOccurrence: Math.max(0, Number(entry.firstOccurrence || 0) || 0),
+    needsFullName: entry.needsFullName === true
   };
 }
 
 function terminologyMatchesSearch(entry, query) {
   if (!query) return true;
-  return [entry.chinese, entry.english, entry.note]
+  return [entry.chinese, entry.english, entry.fullName, entry.note]
     .some((value) => String(value || "").toLowerCase().includes(query));
 }
 
@@ -1382,10 +2270,9 @@ function setTerminologyDirty(dirty = true) {
 function updateTerminologyMeta(payload = null) {
   const count = state.terminologyEntries.length;
   const file = state.terminologyFile || state.currentFile;
-  const source = payload?.manual ? "手动维护" : payload?.ruleBased ? "规则提取" : payload?.cached ? "已缓存" : "当前文件";
-  elements.terminologyMeta.textContent = file
-    ? `${fileLabel(file)} · ${count} 条 · ${source}`
-    : "当前 TeX 文件的固定术语";
+  const scope = payload?.scope === "project" ? "全文术语表" : file ? fileLabel(file) : "全文术语表";
+  const source = payload?.manual ? "手动维护" : payload?.ruleBased ? "规则提取" : payload?.cached ? "已缓存" : "全文";
+  elements.terminologyMeta.textContent = `${scope} · ${count} 条 · ${source}`;
 }
 
 function renderTerminologyEntries() {
@@ -1397,6 +2284,7 @@ function renderTerminologyEntries() {
     visible += 1;
     const row = document.createElement("div");
     row.className = "terminology-row";
+    if (entry.needsFullName && !entry.fullName) row.classList.add("needs-full-name");
     row.dataset.index = String(index);
 
     const makeTextField = (field, labelText, placeholder = "") => {
@@ -1409,6 +2297,7 @@ function renderTerminologyEntries() {
       input.placeholder = placeholder;
       input.addEventListener("input", () => {
         state.terminologyEntries[index][field] = input.value;
+        if (field === "fullName" && input.value.trim()) state.terminologyEntries[index].needsFullName = false;
         setTerminologyDirty(true);
         updateTerminologyMeta();
       });
@@ -1443,8 +2332,9 @@ function renderTerminologyEntries() {
 
     row.append(
       makeTextField("chinese", "中文", "信标"),
-      makeTextField("english", "英文", "beacon"),
-      makeTextField("note", "备注", "可选"),
+      makeTextField("english", "缩写/英文", "ADR"),
+      makeTextField("fullName", "全称", entry.needsFullName ? "请补全缩写全称" : "Adaptive Data Rate"),
+      makeTextField("note", "备注", entry.frequency ? `出现 ${entry.frequency} 次` : "可选"),
       keepLabel,
       deleteButton
     );
@@ -1459,17 +2349,18 @@ function renderTerminologyEntries() {
 }
 
 async function openTerminologyDialog() {
-  if (!state.currentFile) {
-    toast("请先选择一个 TeX 文件。", "error");
+  const terminologyFile = state.currentFile || state.project?.config?.mainTex || "";
+  if (!terminologyFile) {
+    toast("请先打开论文项目。", "error");
     return;
   }
-  state.terminologyFile = state.currentFile;
+  state.terminologyFile = terminologyFile;
   state.terminologyEntries = [];
   state.terminologyDirty = false;
   elements.terminologySearch.value = "";
   updateTerminologyMeta();
   renderTerminologyEntries();
-  setTerminologyStatus("正在读取术语表...");
+  setTerminologyStatus("正在读取全文术语表...");
   elements.terminologyDialog.showModal();
   try {
     const payload = await api(`/api/file/terminology?file=${encodeURIComponent(state.terminologyFile)}`);
@@ -1477,7 +2368,7 @@ async function openTerminologyDialog() {
     state.terminologyDirty = false;
     updateTerminologyMeta(payload);
     renderTerminologyEntries();
-    setTerminologyStatus(payload.cached ? "已读取缓存术语表" : "当前文件还没有术语表", payload.cached ? "saved" : "");
+    setTerminologyStatus(payload.cached ? "已读取全文术语表" : "全文还没有术语表", payload.cached ? "saved" : "");
   } catch (error) {
     setTerminologyStatus("术语表读取失败", "dirty");
     toast(error.message, "error", 5200);
@@ -1494,7 +2385,7 @@ function addTerminologyEntry() {
     toast(`术语表最多保存 ${MAX_TERMINOLOGY_ENTRIES} 条。`, "error");
     return;
   }
-  state.terminologyEntries.push({ chinese: "", english: "", keepEnglish: false, note: "" });
+  state.terminologyEntries.push({ chinese: "", english: "", fullName: "", keepEnglish: false, note: "" });
   elements.terminologySearch.value = "";
   setTerminologyDirty(true);
   updateTerminologyMeta();
@@ -1515,14 +2406,15 @@ function collectTerminologyEntries() {
   return entries;
 }
 
-async function saveTerminology() {
-  if (!state.terminologyFile) return;
+async function saveTerminology(options = {}) {
+  if (!state.terminologyFile) return true;
+  const quiet = options.quiet === true;
   let entries;
   try {
     entries = collectTerminologyEntries();
   } catch (error) {
-    toast(error.message, "error", 5200);
-    return;
+    if (!quiet) toast(error.message, "error", 5200);
+    return false;
   }
   setBusy(elements.saveTerminologyButton, true);
   setTerminologyStatus("正在保存术语表...");
@@ -1536,10 +2428,12 @@ async function saveTerminology() {
     updateTerminologyMeta(payload);
     renderTerminologyEntries();
     setTerminologyStatus("术语表已保存，后续翻译会优先使用它", "saved");
-    toast("术语表已保存。", "success");
+    if (!quiet) toast("术语表已保存。", "success");
+    return true;
   } catch (error) {
     setTerminologyStatus("术语表保存失败", "dirty");
-    toast(error.message, "error", 5200);
+    if (!quiet) toast(error.message, "error", 5200);
+    return false;
   } finally {
     setBusy(elements.saveTerminologyButton, false);
   }
@@ -1550,7 +2444,7 @@ async function regenerateTerminology() {
   if (state.terminologyDirty && !window.confirm("重新提取会覆盖当前未保存的术语修改，继续吗？")) return;
   if (!state.terminologyDirty && state.terminologyEntries.length && !window.confirm("重新提取会覆盖当前术语表，继续吗？")) return;
   setBusy(elements.regenerateTerminologyButton, true);
-  setTerminologyStatus("正在从论文提取术语表...");
+  setTerminologyStatus("正在从全文提取术语表...");
   try {
     const payload = await api("/api/file/terminology", {
       method: "POST",
@@ -1561,13 +2455,668 @@ async function regenerateTerminology() {
     updateTerminologyMeta(payload);
     renderTerminologyEntries();
     setTerminologyStatus(`已提取 ${state.terminologyEntries.length} 条术语`, "saved");
-    toast(`已从论文提取 ${state.terminologyEntries.length} 条术语。`, "success");
+    toast(`已从全文提取 ${state.terminologyEntries.length} 条术语。`, "success");
   } catch (error) {
     setTerminologyStatus("术语表提取失败", "dirty");
     toast(error.message, "error", 6200);
   } finally {
     setBusy(elements.regenerateTerminologyButton, false);
   }
+}
+
+async function applyTerminologyDefinitions() {
+  if (!state.terminologyFile) return;
+  if (state.sourceDirty) {
+    const saved = await saveSourceFile({ deferCompile: true, quiet: true, refreshPreview: false });
+    if (!saved) return;
+  }
+  let entries;
+  try {
+    entries = collectTerminologyEntries();
+  } catch (error) {
+    toast(error.message, "error", 5200);
+    return;
+  }
+  const expandable = entries.filter((entry) => entry.english && entry.fullName);
+  if (!expandable.length) {
+    toast("请先为至少一个缩写填写全称。", "error", 4200);
+    return;
+  }
+  if (!window.confirm("将按全文顺序，把已填写全称的缩写写入第一次出现的位置，格式为“全称（缩写）”。继续吗？")) return;
+  setBusy(elements.applyTerminologyDefinitionsButton, true);
+  setTerminologyStatus("正在写入全文首次出现位置...");
+  try {
+    const result = await api("/api/file/terminology/apply", {
+      method: "POST",
+      body: JSON.stringify({ file: state.terminologyFile, entries })
+    });
+    state.terminologyEntries = (result.terminology?.entries || entries).map(normalizeTerminologyEntry);
+    state.terminologyDirty = false;
+    updateTerminologyMeta(result.terminology);
+    renderTerminologyEntries();
+    if (result.source?.file && state.sourceFile === result.source.file) {
+      state.sourceHash = result.source.sourceHash;
+      state.sourceEol = result.source.eol || state.sourceEol;
+      elements.sourceEditor.value = result.source.content;
+      state.sourceSavedContent = elements.sourceEditor.value;
+      setSourceDirty(false);
+      updateSourceLineNumbers();
+      refreshSourceSearch();
+    }
+    if (result.document && result.document.file === state.currentFile) {
+      state.currentDocument = result.document;
+      renderSegments();
+    }
+    if (result.document?.file) scheduleFastPreview(result.document.file, 0);
+    const applied = result.applied?.length || 0;
+    const skipped = result.skipped?.length || 0;
+    setTerminologyStatus(`已写入 ${applied} 个缩写${skipped ? `，跳过 ${skipped} 个` : ""}`, "saved");
+    toast(applied ? `已把 ${applied} 个缩写写入首次出现位置。` : "没有需要写入的缩写。", applied ? "success" : "error", 5200);
+  } catch (error) {
+    setTerminologyStatus("写入首次出现位置失败", "dirty");
+    toast(error.message, "error", 6200);
+  } finally {
+    setBusy(elements.applyTerminologyDefinitionsButton, false);
+  }
+}
+
+function invalidateReferences() {
+  state.references = null;
+  state.selectedReferenceKey = "";
+}
+
+function normalizeReferenceEntry(entry = {}) {
+  return {
+    ...entry,
+    key: String(entry.key || ""),
+    type: String(entry.type || ""),
+    file: String(entry.file || ""),
+    title: String(entry.title || ""),
+    author: String(entry.author || ""),
+    year: String(entry.year || ""),
+    venue: String(entry.venue || ""),
+    methodKeyword: String(entry.methodKeyword || ""),
+    raw: String(entry.raw || ""),
+    fields: entry.fields && typeof entry.fields === "object" ? entry.fields : {},
+    citationOrder: Number(entry.citationOrder || 0),
+    firstCitation: entry.firstCitation || null
+  };
+}
+
+function referenceVenue(entry) {
+  return entry.venue || entry.fields?.booktitle || entry.fields?.journal || entry.fields?.publisher || "";
+}
+
+function referenceTitle(entry) {
+  return entry.title || entry.key || "Untitled reference";
+}
+
+function referenceSearchText(entry) {
+  return [
+    entry.key,
+    entry.methodKeyword,
+    entry.year,
+    referenceTitle(entry),
+    entry.author,
+    referenceVenue(entry),
+    ...Object.values(entry.fields || {})
+  ].join("\n").toLowerCase();
+}
+
+function referenceMatchesSearch(entry, query) {
+  const terms = String(query || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const haystack = referenceSearchText(entry);
+  return terms.every((term) => haystack.includes(term));
+}
+
+function getVisibleReferences(query = elements.referencesSearch?.value || "") {
+  return (state.references?.entries || [])
+    .map(normalizeReferenceEntry)
+    .filter((entry) => referenceMatchesSearch(entry, query));
+}
+
+function selectedReference() {
+  const key = state.selectedReferenceKey;
+  return (state.references?.entries || []).map(normalizeReferenceEntry).find((entry) => entry.key === key) || null;
+}
+
+function referenceFieldLabel(name) {
+  const labels = state.references?.fieldLabels || {};
+  return labels[name] || name;
+}
+
+function referenceMetaText(entry) {
+  const parts = [];
+  if (entry.methodKeyword) parts.push(entry.methodKeyword);
+  if (entry.year) parts.push(entry.year);
+  if (referenceVenue(entry)) parts.push(referenceVenue(entry));
+  return parts.join(" · ") || "未识别方法关键词 / 年份 / venue";
+}
+
+function renderReferencesAlerts() {
+  if (!elements.referencesAlerts) return;
+  elements.referencesAlerts.replaceChildren();
+  const payload = state.references;
+  if (!payload) return;
+  const alerts = [];
+  if (!payload.bibliographyFiles?.length) {
+    alerts.push({ tone: "warning", text: "当前项目还没有检测到 .bib 文件。可以先用“参考文献转 Bib”功能生成独立 Bib 文件。" });
+  }
+  if (payload.missing?.length) {
+    const sample = payload.missing.slice(0, 5).map((item) => `${item.key}（${item.file}:${item.line}）`).join("，");
+    alerts.push({ tone: "error", text: `正文中有 ${payload.missing.length} 个 citation key 找不到 BibTeX：${sample}${payload.missing.length > 5 ? "…" : ""}` });
+  }
+  if (payload.unused?.length) {
+    const sample = payload.unused.slice(0, 5).join("，");
+    alerts.push({ tone: "muted", text: `Bib 文件中有 ${payload.unused.length} 篇暂未被正文引用：${sample}${payload.unused.length > 5 ? "…" : ""}` });
+  }
+  if (payload.duplicates?.length) {
+    const sample = payload.duplicates.slice(0, 3).map((group) => group.join(" / ")).join("；");
+    alerts.push({ tone: "warning", text: `检测到 ${payload.duplicates.length} 组疑似重复文献：${sample}${payload.duplicates.length > 3 ? "…" : ""}` });
+  }
+  for (const alert of alerts) {
+    const node = document.createElement("div");
+    node.className = `references-alert ${alert.tone}`;
+    node.textContent = alert.text;
+    elements.referencesAlerts.append(node);
+  }
+}
+
+function renderReferenceRow(entry, { compact = false } = {}) {
+  const row = document.createElement(compact ? "button" : "article");
+  row.className = `reference-row${compact ? " compact" : ""}`;
+  row.dataset.referenceKey = entry.key;
+  if (compact) row.type = "button";
+  else {
+    row.tabIndex = 0;
+    row.draggable = true;
+  }
+  row.classList.toggle("active", entry.key === state.selectedReferenceKey);
+
+  const order = document.createElement("span");
+  order.className = `reference-order${entry.citationOrder ? "" : " uncited"}`;
+  order.textContent = entry.citationOrder ? `#${entry.citationOrder}` : "未引";
+
+  const body = document.createElement("div");
+  body.className = "reference-row-body";
+
+  const title = document.createElement("div");
+  title.className = "reference-row-title";
+  title.textContent = referenceTitle(entry);
+
+  const meta = document.createElement("div");
+  meta.className = "reference-row-meta";
+  meta.textContent = `${referenceMetaText(entry)} · ${entry.key}`;
+
+  body.append(title, meta);
+  row.append(order, body);
+
+  if (!compact) {
+    const insert = document.createElement("button");
+    insert.className = "mini-button reference-insert-button";
+    insert.type = "button";
+    insert.title = "点击插入；也可以拖到中英文中的指定位置";
+    insert.innerHTML = '<i data-lucide="quote"></i>';
+    insert.addEventListener("click", (event) => {
+      event.stopPropagation();
+      insertCitationAtCurrentTarget(entry);
+    });
+    row.append(insert);
+  }
+
+  const activate = () => {
+    state.selectedReferenceKey = entry.key;
+    renderReferenceList();
+    renderReferenceDetail(entry);
+  };
+  row.addEventListener("click", () => {
+    if (compact) {
+      state.selectedReferenceKey = entry.key;
+      insertCitationAtCurrentTarget(entry);
+      closeReferenceInsertDialog();
+      return;
+    }
+    activate();
+  });
+  if (!compact) row.addEventListener("dblclick", () => insertCitationAtCurrentTarget(entry));
+  if (!compact) {
+    row.addEventListener("dragstart", (event) => {
+      state.selectedReferenceKey = entry.key;
+      elements.referencesList.querySelectorAll(".reference-row").forEach((item) => {
+        item.classList.toggle("active", item.dataset.referenceKey === entry.key);
+      });
+      renderReferenceDetail(entry);
+      row.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData(CITATION_DRAG_TYPE, entry.key);
+      event.dataTransfer.setData("text/plain", `\\cite{${entry.key}}`);
+
+      const dragPreview = document.createElement("div");
+      dragPreview.className = "citation-drag-preview";
+      dragPreview.textContent = `“  \\cite{${entry.key}}`;
+      document.body.append(dragPreview);
+      event.dataTransfer.setDragImage(dragPreview, 18, 18);
+      window.setTimeout(() => dragPreview.remove(), 0);
+    });
+    row.addEventListener("dragend", () => {
+      row.classList.remove("dragging");
+      document.querySelectorAll(".citation-drop-target").forEach((item) => item.classList.remove("citation-drop-target"));
+    });
+    row.addEventListener("keydown", (event) => {
+      if (!["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      activate();
+    });
+  }
+  return row;
+}
+
+function renderReferenceList() {
+  if (!elements.referencesList) return;
+  const entries = getVisibleReferences();
+  elements.referencesList.replaceChildren();
+  if (!state.references) {
+    elements.referencesList.innerHTML = '<div class="empty-state">正在读取参考文献...</div>';
+    return;
+  }
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = state.references.entries?.length ? "没有匹配的文献。" : "当前 Bib 文件里还没有可识别的文献。";
+    elements.referencesList.append(empty);
+    return;
+  }
+  if (!state.selectedReferenceKey || !entries.some((entry) => entry.key === state.selectedReferenceKey)) {
+    state.selectedReferenceKey = entries[0].key;
+  }
+  for (const entry of entries) elements.referencesList.append(renderReferenceRow(entry));
+  refreshIcons();
+}
+
+function renderReferenceInsertList() {
+  if (!elements.referenceInsertList) return;
+  const entries = getVisibleReferences(elements.referenceInsertSearch.value);
+  elements.referenceInsertList.replaceChildren();
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = state.references?.entries?.length ? "没有匹配的文献。" : "当前 Bib 文件里还没有可插入的文献。";
+    elements.referenceInsertList.append(empty);
+    return;
+  }
+  for (const entry of entries) elements.referenceInsertList.append(renderReferenceRow(entry, { compact: true }));
+  refreshIcons();
+}
+
+function renderReferenceDetail(entry = selectedReference()) {
+  if (!elements.referenceDetail) return;
+  elements.referenceDetail.replaceChildren();
+  if (!entry) {
+    elements.referenceDetail.innerHTML = '<div class="empty-state">选择一篇文献后查看 BibTeX 源码和字段解释。</div>';
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "reference-detail-header";
+  const title = document.createElement("h2");
+  title.textContent = referenceTitle(entry);
+  const meta = document.createElement("div");
+  meta.className = "reference-detail-meta";
+  meta.textContent = `${entry.file}${entry.startLine ? `:${entry.startLine}` : ""} · ${entry.key}`;
+  header.append(title, meta);
+
+  const summary = document.createElement("div");
+  summary.className = "reference-summary-grid";
+  for (const [label, value] of [
+    ["方法关键词", entry.methodKeyword || "未识别"],
+    ["年份", entry.year || "未填写"],
+    ["Venue", referenceVenue(entry) || "未填写"],
+    ["正文首次引用", entry.firstCitation ? `${entry.firstCitation.file}:${entry.firstCitation.line}` : "尚未引用"]
+  ]) {
+    const item = document.createElement("div");
+    const name = document.createElement("span");
+    name.textContent = label;
+    const text = document.createElement("strong");
+    text.textContent = value;
+    item.append(name, text);
+    summary.append(item);
+  }
+
+  const fields = document.createElement("dl");
+  fields.className = "reference-field-list";
+  for (const [name, value] of Object.entries(entry.fields || {})) {
+    if (!value) continue;
+    const dt = document.createElement("dt");
+    dt.textContent = `${name}：${referenceFieldLabel(name)}`;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    fields.append(dt, dd);
+  }
+
+  const sourceLabel = document.createElement("h3");
+  sourceLabel.textContent = "原始 BibTeX 源码";
+  const source = document.createElement("pre");
+  source.className = "reference-bib-source";
+  source.textContent = entry.raw;
+
+  elements.referenceDetail.append(header, summary, fields, sourceLabel, source);
+}
+
+function renderReferences() {
+  const payload = state.references;
+  const total = payload?.entries?.length || 0;
+  const files = payload?.bibliographyFiles?.length ? payload.bibliographyFiles.map(fileLabel).join("，") : "未检测到 Bib 文件";
+  elements.referencesMeta.textContent = `${files} · ${total} 篇文献 · 按正文第一次引用排序`;
+  renderReferencesAlerts();
+  renderReferenceList();
+  renderReferenceDetail();
+  if (elements.referenceInsertDialog?.open) renderReferenceInsertList();
+}
+
+function renderReferenceAddBibFiles(files = [], selected = "") {
+  if (!elements.referenceAddBibFile) return;
+  elements.referenceAddBibFile.replaceChildren();
+  const options = files.length ? files : ["references.bib"];
+  for (const file of options) {
+    const option = document.createElement("option");
+    option.value = file;
+    option.textContent = file;
+    option.selected = file === selected || (!selected && file === options[0]);
+    elements.referenceAddBibFile.append(option);
+  }
+}
+
+function openReferenceAddDialog() {
+  if (!elements.referenceAddDialog) return;
+  elements.referenceAddForm?.reset();
+  elements.referenceAddBib.value = "";
+  elements.referenceAddKey.value = "";
+  elements.referenceAddStatus.textContent = "粘贴 DOI、doi.org 链接或论文网页链接，然后获取元数据。";
+  renderReferenceAddBibFiles(state.references?.bibliographyFiles || []);
+  elements.referenceAddDialog.showModal();
+  window.setTimeout(() => elements.referenceAddUrl?.focus(), 0);
+}
+
+function closeReferenceAddDialog() {
+  if (elements.referenceAddDialog?.open) elements.referenceAddDialog.close();
+}
+
+async function lookupNewReference() {
+  const url = elements.referenceAddUrl.value.trim();
+  if (!url) {
+    toast("请先输入论文链接或 DOI。", "error");
+    elements.referenceAddUrl.focus();
+    return;
+  }
+  setBusy(elements.referenceLookupButton, true);
+  elements.referenceAddStatus.textContent = "正在读取论文元数据……";
+  try {
+    const result = await api("/api/references/lookup", {
+      method: "POST",
+      body: JSON.stringify({ url })
+    });
+    elements.referenceAddKey.value = result.entry.key;
+    elements.referenceAddBib.value = result.entry.raw;
+    renderReferenceAddBibFiles(result.bibFiles, result.defaultBibFile);
+    if (result.duplicate?.length) {
+      elements.referenceAddStatus.textContent = `发现可能重复文献：${result.duplicate.map((item) => item.key).join("、")}。请确认是否仍要加入。`;
+      elements.referenceAddStatus.className = "reference-add-status warning";
+    } else {
+      elements.referenceAddStatus.textContent = `已识别：${result.entry.fields?.title || result.entry.key}。可以修改 citation key 或 BibTeX 后加入。`;
+      elements.referenceAddStatus.className = "reference-add-status";
+    }
+  } catch (error) {
+    elements.referenceAddStatus.textContent = error.message;
+    elements.referenceAddStatus.className = "reference-add-status error";
+    toast(error.message, "error", 6200);
+  } finally {
+    setBusy(elements.referenceLookupButton, false);
+  }
+}
+
+async function addNewReference() {
+  const raw = elements.referenceAddBib.value.trim();
+  if (!raw) {
+    toast("请先获取并确认 BibTeX。", "error");
+    return;
+  }
+  setBusy(elements.referenceAddSubmitButton, true);
+  elements.referenceAddStatus.textContent = "正在写入 Bib 文件……";
+  try {
+    const result = await api("/api/references/add", {
+      method: "POST",
+      body: JSON.stringify({
+        bibFile: elements.referenceAddBibFile.value,
+        raw,
+        key: elements.referenceAddKey.value.trim()
+      })
+    });
+    state.references = {
+      ...result.references,
+      entries: (result.references.entries || []).map(normalizeReferenceEntry)
+    };
+    state.selectedReferenceKey = result.entry.key;
+    renderReferences();
+    closeReferenceAddDialog();
+    toast(`已新增文献 ${result.entry.key}，写入 ${result.file}。`, "success", 5200);
+  } catch (error) {
+    elements.referenceAddStatus.textContent = error.message;
+    elements.referenceAddStatus.className = "reference-add-status error";
+    toast(error.message, "error", 6200);
+  } finally {
+    setBusy(elements.referenceAddSubmitButton, false);
+  }
+}
+
+async function loadReferences({ force = false } = {}) {
+  if (state.references && !force) {
+    renderReferences();
+    return;
+  }
+  elements.referencesMeta.textContent = "正在读取 Bib 文件和正文引用...";
+  try {
+    const payload = await api("/api/references");
+    state.references = {
+      ...payload,
+      entries: (payload.entries || []).map(normalizeReferenceEntry)
+    };
+    if (!state.selectedReferenceKey && state.references.entries.length) {
+      state.selectedReferenceKey = state.references.entries[0].key;
+    }
+    renderReferences();
+  } catch (error) {
+    elements.referencesMeta.textContent = "参考文献读取失败";
+    elements.referencesList.innerHTML = '<div class="empty-state">无法读取参考文献。</div>';
+    elements.referenceDetail.innerHTML = '<div class="empty-state">请先确认项目里有 Bib 文件，或者先完成参考文献转 Bib。</div>';
+    toast(error.message, "error", 5200);
+  }
+}
+
+function rememberCitationTarget(textarea) {
+  if (!textarea || typeof textarea.selectionStart !== "number") return;
+  state.citationTarget = {
+    element: textarea,
+    start: textarea.selectionStart,
+    end: textarea.selectionEnd
+  };
+}
+
+function citationTargetElement() {
+  const active = document.activeElement;
+  if (active?.matches?.("textarea.segment-textarea, textarea.source-editor")) {
+    rememberCitationTarget(active);
+    return active;
+  }
+  if (state.citationTarget?.element?.isConnected) return state.citationTarget.element;
+  return null;
+}
+
+function textareaCaretOffsetFromPoint(textarea, clientX, clientY) {
+  const value = textarea.value;
+  if (!value) return 0;
+  const style = window.getComputedStyle(textarea);
+  const bounds = textarea.getBoundingClientRect();
+  const mirror = document.createElement("div");
+  const copiedProperties = [
+    "font-family", "font-size", "font-style", "font-weight", "font-variant",
+    "letter-spacing", "line-height", "text-align", "text-indent", "text-transform",
+    "direction", "tab-size", "padding", "border", "box-sizing", "overflow-wrap", "word-break"
+  ];
+  for (const property of copiedProperties) mirror.style.setProperty(property, style.getPropertyValue(property));
+  const horizontalBorder = Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
+  mirror.style.position = "fixed";
+  mirror.style.left = "0";
+  mirror.style.top = "0";
+  mirror.style.width = `${textarea.clientWidth + horizontalBorder}px`;
+  mirror.style.height = "auto";
+  mirror.style.minHeight = "0";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.overflow = "visible";
+  mirror.style.visibility = "hidden";
+  mirror.style.pointerEvents = "none";
+  mirror.textContent = `${value}\u200b`;
+  document.body.append(mirror);
+
+  try {
+    const textNode = mirror.firstChild;
+    const range = document.createRange();
+    const caretRect = (offset) => {
+      range.setStart(textNode, Math.min(offset, value.length));
+      range.collapse(true);
+      return range.getBoundingClientRect();
+    };
+    const mirrorBounds = mirror.getBoundingClientRect();
+    const targetX = mirrorBounds.left + clientX - bounds.left + textarea.scrollLeft;
+    const targetY = mirrorBounds.top + clientY - bounds.top + textarea.scrollTop;
+
+    let low = 0;
+    let high = value.length;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (caretRect(middle).top <= targetY) low = middle;
+      else high = middle - 1;
+    }
+    const lineTop = caretRect(low).top;
+    let lineStart = 0;
+    let lineEnd = low;
+    high = low;
+    while (lineStart < high) {
+      const middle = Math.floor((lineStart + high) / 2);
+      if (caretRect(middle).top < lineTop - 0.5) lineStart = middle + 1;
+      else high = middle;
+    }
+    high = value.length;
+    while (lineEnd < high) {
+      const middle = Math.ceil((lineEnd + high) / 2);
+      if (caretRect(middle).top <= lineTop + 0.5) lineEnd = middle;
+      else high = middle - 1;
+    }
+
+    let closest = lineStart;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (let offset = lineStart; offset <= lineEnd; offset += 1) {
+      const distance = Math.abs(caretRect(offset).left - targetX);
+      if (distance >= closestDistance) continue;
+      closest = offset;
+      closestDistance = distance;
+    }
+    return closest;
+  } finally {
+    mirror.remove();
+  }
+}
+
+function insertCitationIntoTarget(target, key, start, end = start) {
+  const insertionPoint = Math.max(start, end);
+  const before = target.value.slice(0, insertionPoint);
+  const glue = before && !/[\s~([{]$/.test(before) ? "~" : "";
+  const citation = `${glue}\\cite{${key}}`;
+  target.setRangeText(citation, insertionPoint, insertionPoint, "end");
+  target.dispatchEvent(new Event("input", { bubbles: true }));
+  target.focus();
+  rememberCitationTarget(target);
+  toast(`已插入 \\cite{${key}}。`, "success");
+}
+
+function insertCitationAtCurrentTarget(entry) {
+  const target = citationTargetElement();
+  if (!target) {
+    toast("请先在中文、英文段落或 TeX 源码里点一下要插入引用的位置。", "error", 5600);
+    return false;
+  }
+  const start = Number.isFinite(state.citationTarget?.start) ? state.citationTarget.start : target.selectionStart || 0;
+  const end = Number.isFinite(state.citationTarget?.end) ? state.citationTarget.end : target.selectionEnd || start;
+  insertCitationIntoTarget(target, entry.key, start, end);
+  return true;
+}
+
+function closeReferenceInsertDialog() {
+  if (elements.referenceInsertDialog?.open) elements.referenceInsertDialog.close();
+}
+
+async function openReferenceInsertDialog() {
+  closeCitationContextMenu();
+  if (!state.references) await loadReferences();
+  if (!state.references) return;
+  elements.referenceInsertSearch.value = elements.referencesSearch?.value || "";
+  elements.referenceInsertMeta.textContent = state.citationTarget?.element?.classList.contains("source-editor")
+    ? "将插入到 TeX 源码当前光标处"
+    : "将插入到当前段落光标处；如果选中了一个词，会插在这个词后面";
+  renderReferenceInsertList();
+  if (!elements.referenceInsertDialog.open) elements.referenceInsertDialog.showModal();
+  window.requestAnimationFrame(() => elements.referenceInsertSearch.focus());
+}
+
+function closeCitationContextMenu() {
+  document.querySelector(".citation-context-menu")?.remove();
+}
+
+function openCitationContextMenu(event, textarea) {
+  rememberCitationTarget(textarea);
+  event.preventDefault();
+  closeCitationContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "citation-context-menu";
+  menu.style.left = `${Math.min(event.clientX, window.innerWidth - 190)}px`;
+  menu.style.top = `${Math.min(event.clientY, window.innerHeight - 54)}px`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.innerHTML = '<i data-lucide="quote"></i><span>插入文献</span>';
+  button.addEventListener("click", () => openReferenceInsertDialog());
+  menu.append(button);
+  menu.addEventListener("pointerdown", (innerEvent) => innerEvent.stopPropagation());
+  document.body.append(menu);
+  refreshIcons();
+  window.setTimeout(() => {
+    document.addEventListener("pointerdown", closeCitationContextMenu, { once: true });
+    document.addEventListener("keydown", (keyEvent) => {
+      if (keyEvent.key === "Escape") closeCitationContextMenu();
+    }, { once: true });
+  }, 0);
+}
+
+function attachCitationTarget(textarea) {
+  if (!textarea) return;
+  for (const eventName of ["focus", "click", "keyup", "select"]) {
+    textarea.addEventListener(eventName, () => rememberCitationTarget(textarea));
+  }
+  textarea.addEventListener("contextmenu", (event) => openCitationContextMenu(event, textarea));
+  textarea.addEventListener("dragover", (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes(CITATION_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    textarea.classList.add("citation-drop-target");
+  });
+  textarea.addEventListener("dragleave", () => textarea.classList.remove("citation-drop-target"));
+  textarea.addEventListener("drop", (event) => {
+    const key = event.dataTransfer?.getData(CITATION_DRAG_TYPE);
+    if (!key) return;
+    event.preventDefault();
+    textarea.classList.remove("citation-drop-target");
+    const offset = textareaCaretOffsetFromPoint(textarea, event.clientX, event.clientY);
+    insertCitationIntoTarget(textarea, key, offset);
+  });
 }
 
 function renderDocumentList() {
@@ -2137,6 +3686,16 @@ function movePdfPage(delta) {
   elements.visiblePage.textContent = `${targetNumber} / ${pages.length}`;
 }
 
+function flashSourceSelection() {
+  window.clearTimeout(state.sourceHighlightTimer);
+  elements.sourceEditor.classList.remove("source-located");
+  void elements.sourceEditor.offsetWidth;
+  elements.sourceEditor.classList.add("source-located");
+  state.sourceHighlightTimer = window.setTimeout(() => {
+    elements.sourceEditor.classList.remove("source-located");
+  }, 2600);
+}
+
 function updateWarnings(warnings = [], layoutChanges = [], errors = []) {
   const layoutWarnings = layoutChanges.map((change) => {
     const kind = change.type === "figure" ? "图" : "表";
@@ -2210,6 +3769,7 @@ async function openSourceLocation(file, line) {
   const lineHeight = Number.parseFloat(getComputedStyle(elements.sourceEditor).lineHeight) || 20;
   elements.sourceEditor.scrollTop = Math.max(0, (targetLine - 5) * lineHeight);
   elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
+  flashSourceSelection();
   updateSourceStatus();
   return true;
 }
@@ -2292,10 +3852,11 @@ function updateBuild(build) {
   }
 }
 
-async function refreshProject({ preserveDocument = true } = {}) {
+async function refreshProject({ preserveDocument = true, remoteName = state.gitRemoteName } = {}) {
   const previousRoot = state.project?.config?.projectRoot;
   const previousMainTex = state.project?.config?.mainTex;
-  state.project = await api("/api/bootstrap");
+  const query = remoteName ? `?remoteName=${encodeURIComponent(remoteName)}` : "";
+  state.project = await api(`/api/bootstrap${query}`);
   invalidatePdfNavigationIndex();
   const projectChanged = previousRoot && (
     state.project.config?.projectRoot !== previousRoot
@@ -2310,6 +3871,7 @@ async function refreshProject({ preserveDocument = true } = {}) {
     state.sourceDirty = false;
     state.fastPreviewFile = "";
     state.fastPreviewCache = [];
+    invalidateReferences();
     clearCompileDiagnosis();
   }
   if (state.project.setupRequired) {
@@ -2327,6 +3889,40 @@ async function refreshProject({ preserveDocument = true } = {}) {
   if (!preserveDocument && state.project.documents.length) {
     await loadDocument(state.project.documents[0].file);
   }
+  return true;
+}
+
+async function applyProjectPayload(project, { preserveDocument = true } = {}) {
+  if (!project) return false;
+  const previousRoot = state.project?.config?.projectRoot;
+  const previousMainTex = state.project?.config?.mainTex;
+  state.project = project;
+  invalidatePdfNavigationIndex();
+  const projectChanged = previousRoot && (
+    state.project.config?.projectRoot !== previousRoot
+    || state.project.config?.mainTex !== previousMainTex
+  );
+  if (projectChanged) {
+    state.buildPreviewAvailable = null;
+    state.sourceFile = null;
+    state.sourceHash = "";
+    state.sourceEol = "\n";
+    state.sourceSavedContent = "";
+    state.sourceDirty = false;
+    state.fastPreviewFile = "";
+    state.fastPreviewCache = [];
+    invalidateReferences();
+    clearCompileDiagnosis();
+  }
+  updateProjectHeader();
+  renderDocumentList();
+  renderSourceFileOptions(state.sourceDirty ? state.sourceFile : state.currentFile);
+  if (!preserveDocument && state.project.documents?.length) {
+    await loadDocument(state.project.documents[0].file);
+    return true;
+  }
+  if (state.previewMode === "pdf") updatePdf();
+  else scheduleFastPreview(state.currentDocument?.file || state.currentFile || state.project.config?.mainTex || "");
   return true;
 }
 
@@ -2397,6 +3993,162 @@ function attachMathDropTarget(row, target) {
   });
 }
 
+function segmentChineseSaveTimerKey(segment) {
+  return `chinese:${segment.id}`;
+}
+
+function segmentEnglishSaveTimerKey(segment) {
+  return `english:${segment.id}`;
+}
+
+function clearSegmentSaveTimers(segment) {
+  for (const key of [segmentChineseSaveTimerKey(segment), segmentEnglishSaveTimerKey(segment)]) {
+    window.clearTimeout(state.saveTimers.get(key));
+    state.saveTimers.delete(key);
+  }
+}
+
+function segmentTranslationKey(segment) {
+  return `${segment.file}\0${segment.id || `${segment.index}:${segment.sourceHash}`}`;
+}
+
+function segmentTranslationLabel(segmentOrJob) {
+  return `P${String(Number(segmentOrJob.index || 0) + 1).padStart(2, "0")}`;
+}
+
+function segmentTranslationJob(segment) {
+  return state.segmentTranslationJobs.get(segmentTranslationKey(segment)) || null;
+}
+
+function paintSegmentTranslationRow(row, job) {
+  const status = row.querySelector(".segment-status");
+  const button = row.querySelector(".translate-button");
+  const running = job.status === "running";
+  status.textContent = job.status === "queued" ? "排队中" : running ? "正在翻译…" : "翻译失败";
+  status.className = `segment-status ${job.status === "failed" ? "english-changed" : "pending"}`;
+  status.title = job.message || "";
+  button.title = job.status === "queued" ? "已加入翻译队列" : running ? "正在请求 AI 翻译" : "翻译失败，可修改后重试";
+  setBusy(button, job.status !== "failed");
+}
+
+function updateSegmentTranslationRow(job) {
+  if (state.currentDocument?.file !== job.file) return;
+  const row = [...elements.segmentList.querySelectorAll(".segment-row")]
+    .find((candidate) => candidate.dataset.file === job.file && candidate.dataset.segmentId === job.segmentId);
+  if (!row) return;
+  paintSegmentTranslationRow(row, job);
+}
+
+function applySegmentTranslationState(row, segment) {
+  const job = segmentTranslationJob(segment);
+  if (!job) return false;
+  paintSegmentTranslationRow(row, job);
+  return true;
+}
+
+function enqueueSegmentTranslation(segment, chinese) {
+  const key = segmentTranslationKey(segment);
+  const existing = state.segmentTranslationJobs.get(key);
+  if (existing) {
+    if (existing.status === "failed") {
+      state.segmentTranslationJobs.delete(key);
+    } else {
+      toast(`${segmentTranslationLabel(existing)} 已在翻译队列中。`, "success", 2600);
+      updateSegmentTranslationRow(existing);
+      return;
+    }
+  }
+  const job = {
+    key,
+    segmentId: segment.id,
+    file: segment.file,
+    index: segment.index,
+    sourceHash: segment.sourceHash,
+    chinese,
+    deferCompile: state.project?.config?.autoCompile !== true,
+    status: "queued",
+    message: "已加入翻译队列，等待空闲翻译通道。"
+  };
+  state.segmentTranslationJobs.set(key, job);
+  state.segmentTranslationQueue.push(key);
+  updateSegmentTranslationRow(job);
+  setFileTranslationProgress(0, Math.max(1, state.segmentTranslationJobs.size), `${segmentTranslationLabel(job)} · 已加入翻译队列`);
+  toast(`${segmentTranslationLabel(job)} 已加入翻译队列。`, "success", 2800);
+  runSegmentTranslationQueue();
+}
+
+function runSegmentTranslationQueue() {
+  while (
+    state.activeSegmentTranslations < MAX_PARALLEL_SEGMENT_TRANSLATIONS
+    && state.segmentTranslationQueue.length
+  ) {
+    const key = state.segmentTranslationQueue.shift();
+    const job = state.segmentTranslationJobs.get(key);
+    if (!job || job.status !== "queued") continue;
+    void runSegmentTranslationJob(job);
+  }
+}
+
+async function runSegmentTranslationJob(job) {
+  state.activeSegmentTranslations += 1;
+  job.status = "running";
+  job.message = "正在请求 AI，完成后会写入英文 TeX。";
+  updateSegmentTranslationRow(job);
+  setFileTranslationProgress(1, 2, `${segmentTranslationLabel(job)} · 正在请求 AI 翻译...`);
+  const slowTimer = window.setTimeout(() => {
+    if (state.segmentTranslationJobs.get(job.key)?.status !== "running") return;
+    job.message = "AI 仍在处理中；你可以继续把其他段落加入队列。";
+    updateSegmentTranslationRow(job);
+    setFileTranslationProgress(1, 2, `${segmentTranslationLabel(job)} · AI 仍在处理中，其他段落可以继续排队`, "warning");
+  }, 15_000);
+  try {
+    const result = await api("/api/segment/translate", {
+      method: "POST",
+      body: JSON.stringify({
+        file: job.file,
+        index: job.index,
+        sourceHash: job.sourceHash,
+        chinese: job.chinese,
+        deferCompile: job.deferCompile
+      })
+    });
+    window.clearTimeout(slowTimer);
+    state.segmentTranslationJobs.delete(job.key);
+    if (state.currentFile === result.document.file) {
+      state.currentDocument = result.document;
+      renderSegments();
+      scheduleFastPreview(result.document.file, 0);
+    }
+    updateBuild(result.build);
+    invalidateReferences();
+    scheduleProjectRefresh();
+    if (result.build && !result.build.skipped) {
+      setFileTranslationProgress(2, 2, result.build.success ? `${segmentTranslationLabel(job)} · 英文与 PDF 已更新` : `${segmentTranslationLabel(job)} · 英文已写入 TeX，但编译存在错误`, result.build.success ? "" : "error");
+      toast(result.build.success ? `${segmentTranslationLabel(job)} 英文段落和 PDF 已更新。` : `${segmentTranslationLabel(job)} 英文段落已写入 TeX，但 PDF 编译存在错误。`, result.build.success ? "success" : "error", 5600);
+    } else {
+      setFileTranslationProgress(2, 2, `${segmentTranslationLabel(job)} · 英文已写入 TeX，PDF 尚未重新编译`);
+      toast(`${segmentTranslationLabel(job)} 英文段落已写入 TeX。`, "success", 4200);
+    }
+  } catch (error) {
+    window.clearTimeout(slowTimer);
+    const message = translationFailureMessage(error);
+    job.status = "failed";
+    job.message = message;
+    updateSegmentTranslationRow(job);
+    setFileTranslationProgress(0, 2, `${segmentTranslationLabel(job)} · 翻译失败：${message}`, "error");
+    toast(message, "error", 6200);
+    window.setTimeout(() => {
+      if (state.segmentTranslationJobs.get(job.key) !== job) return;
+      state.segmentTranslationJobs.delete(job.key);
+      if (state.currentFile === job.file && state.currentDocument) renderSegments();
+    }, 7000);
+  } finally {
+    window.clearTimeout(slowTimer);
+    state.activeSegmentTranslations = Math.max(0, state.activeSegmentTranslations - 1);
+    runSegmentTranslationQueue();
+  }
+}
+
 function createSegmentRow(segment) {
   const row = document.createElement("article");
   row.className = "segment-row";
@@ -2444,7 +4196,38 @@ function createSegmentRow(segment) {
   status.className = `segment-status ${segment.translationStatus}`;
   chinese.value = segment.chinese || "";
   english.value = segment.english;
+  attachCitationTarget(chinese);
+  attachCitationTarget(english);
   if (segment.chinese) translateChineseButton.title = "重新翻译本段到中文";
+  applySegmentTranslationState(row, segment);
+  let englishSaveInFlight = false;
+  let englishSavePending = false;
+  const latestSourceHash = () => row.dataset.segmentSourceHash || segment.sourceHash;
+  const markEnglishChanged = (message = "英文待保存") => {
+    english.classList.add("changed");
+    status.textContent = message;
+    status.className = "segment-status english-changed";
+  };
+  const refreshSegmentSnapshot = (document) => {
+    const nextSegment = document?.segments?.find((item) => item.index === segment.index);
+    if (!nextSegment) return null;
+    segment.id = nextSegment.id;
+    segment.sourceHash = nextSegment.sourceHash;
+    segment.english = nextSegment.english;
+    segment.chinese = nextSegment.chinese;
+    segment.translationStatus = nextSegment.translationStatus;
+    row.dataset.segmentId = nextSegment.id;
+    row.dataset.segmentSourceHash = nextSegment.sourceHash;
+    return nextSegment;
+  };
+  const scheduleEnglishAutosave = (delay = 950) => {
+    const key = segmentEnglishSaveTimerKey(segment);
+    window.clearTimeout(state.saveTimers.get(key));
+    state.saveTimers.set(key, window.setTimeout(() => {
+      state.saveTimers.delete(key);
+      void saveEnglish(false, { automatic: true });
+    }, delay));
+  };
 
   translateChineseButton.addEventListener("click", async () => {
     setBusy(translateChineseButton, true);
@@ -2478,15 +4261,17 @@ function createSegmentRow(segment) {
     chinese.classList.add("changed");
     status.textContent = "待更新英文";
     status.className = "segment-status english-changed";
-    window.clearTimeout(state.saveTimers.get(segment.id));
-    state.saveTimers.set(segment.id, window.setTimeout(async () => {
+    const key = segmentChineseSaveTimerKey(segment);
+    window.clearTimeout(state.saveTimers.get(key));
+    state.saveTimers.set(key, window.setTimeout(async () => {
+      state.saveTimers.delete(key);
       try {
         const saved = await api("/api/segment/chinese", {
           method: "POST",
           body: JSON.stringify({
             file: segment.file,
             index: segment.index,
-            sourceHash: segment.sourceHash,
+            sourceHash: latestSourceHash(),
             chinese: chinese.value
           })
         });
@@ -2506,8 +4291,7 @@ function createSegmentRow(segment) {
       toast("中文选区无法安全定位到 TeX 源码；请在右侧英文 LaTeX 中选择对应内容，或取消选择后注释整段。", "warning", 6200);
       return;
     }
-    window.clearTimeout(state.saveTimers.get(segment.id));
-    state.saveTimers.delete(segment.id);
+    clearSegmentSaveTimers(segment);
     setBusy(commentParagraphButton, true);
     try {
       const result = await api("/api/segment/comment", {
@@ -2515,7 +4299,7 @@ function createSegmentRow(segment) {
         body: JSON.stringify({
           file: segment.file,
           index: segment.index,
-          sourceHash: segment.sourceHash,
+          sourceHash: latestSourceHash(),
           chinese: chinese.value,
           ...(englishSelection || {})
         })
@@ -2524,6 +4308,7 @@ function createSegmentRow(segment) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
+      invalidateReferences();
       scheduleProjectRefresh();
       toast("本段已注释，TeX 源码仍然保留。", "success", 4600);
     } catch (error) {
@@ -2547,112 +4332,104 @@ function createSegmentRow(segment) {
 
   english.addEventListener("input", () => {
     fitSegmentRow(row);
-    english.classList.add("changed");
-    status.textContent = "英文待保存";
-    status.className = "segment-status english-changed";
+    markEnglishChanged("英文待自动保存");
+    englishSavePending = englishSaveInFlight;
+    scheduleEnglishAutosave();
   });
 
-  translateButton.addEventListener("click", async () => {
+  translateButton.addEventListener("click", () => {
     if (!chinese.value.trim()) {
       toast("请先填写中文工作稿。", "error");
       chinese.focus();
       return;
     }
-    setBusy(translateButton, true);
-    status.textContent = "正在翻译…";
-    status.className = "segment-status pending";
-    const deferCompile = state.project?.config?.autoCompile !== true;
-    status.title = "正在请求 AI，完成后会写入英文 TeX。";
-    setFileTranslationProgress(1, 2, `P${String(segment.index + 1).padStart(2, "0")} · 正在请求 AI 翻译...`);
-    let translated = false;
-    const slowTimer = window.setTimeout(() => {
-      if (!translated) setFileTranslationProgress(1, 2, "AI 仍在处理中，请稍候；超时后会自动提示。", "warning");
-    }, 15_000);
-    try {
-      const result = await api("/api/segment/translate", {
-        method: "POST",
-        body: JSON.stringify({
-          file: segment.file,
-          index: segment.index,
-          sourceHash: segment.sourceHash,
-          chinese: chinese.value,
-          deferCompile
-        })
-      });
-      translated = true;
-      window.clearTimeout(slowTimer);
-      state.currentDocument = result.document;
-      renderSegments();
-      scheduleFastPreview(result.document.file, 0);
-      updateBuild(result.build);
-      scheduleProjectRefresh();
-      if (result.build && !result.build.skipped) {
-        setFileTranslationProgress(2, 2, result.build.success ? "英文与 PDF 已更新" : "英文已写入 TeX，但编译存在错误", result.build.success ? "" : "error");
-        toast(result.build.success ? "英文段落和 PDF 已更新。" : "英文段落已写入 TeX，但 PDF 编译存在错误。", result.build.success ? "success" : "error", 5600);
-      } else {
-        setFileTranslationProgress(2, 2, "英文已写入 TeX，PDF 尚未重新编译");
-        toast("英文段落已写入 TeX。需要更新 PDF 时请点击“编译全文”。", "success", 5600);
-      }
-    } catch (error) {
-      window.clearTimeout(slowTimer);
-      const message = translationFailureMessage(error);
-      setFileTranslationProgress(translated ? 2 : 0, 2, translated ? `英文已写入 TeX，但后续刷新失败：${message}` : `翻译失败：${message}`, "error");
-      if (!translated) {
-        status.textContent = "翻译失败";
-        status.className = "segment-status english-changed";
-        status.title = message;
-      }
-      toast(
-        message,
-        "error",
-        6200
-      );
-    } finally {
-      setBusy(translateButton, false);
-    }
+    enqueueSegmentTranslation({ ...segment, sourceHash: latestSourceHash() }, chinese.value);
   });
 
-  async function saveEnglish(force = false) {
+  async function saveEnglish(force = false, options = {}) {
+    const automatic = options.automatic === true;
+    const timerKey = segmentEnglishSaveTimerKey(segment);
+    window.clearTimeout(state.saveTimers.get(timerKey));
+    state.saveTimers.delete(timerKey);
+    if (englishSaveInFlight) {
+      englishSavePending = true;
+      if (!automatic) toast("英文正在保存，最新修改会继续写入 TeX。", "warning", 3000);
+      return false;
+    }
+
     const deferCompile = state.project?.config?.autoCompile !== true;
+    const requestedEnglish = english.value;
+    let forceRetry = false;
+    let saved = false;
+    englishSaveInFlight = true;
     setBusy(saveEnglishButton, true);
+    status.textContent = automatic ? "英文自动保存中..." : "英文保存中...";
+    status.className = "segment-status pending";
     try {
       const result = await api("/api/segment/english", {
         method: "POST",
         body: JSON.stringify({
           file: segment.file,
           index: segment.index,
-          sourceHash: segment.sourceHash,
-          english: english.value,
+          sourceHash: latestSourceHash(),
+          english: requestedEnglish,
           chinese: chinese.value,
           deferCompile,
           force
         })
       });
       state.currentDocument = result.document;
-      renderSegments();
+      const nextSegment = refreshSegmentSnapshot(result.document);
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
+      invalidateReferences();
       scheduleProjectRefresh();
-      if (result.build && !result.build.skipped) {
-        toast(result.build.success ? "英文修改已写入 TeX，PDF 已更新。" : "英文修改已写入 TeX，但编译仍有错误。", result.build.success ? "success" : "error");
+      if (english.value === requestedEnglish) {
+        english.classList.remove("changed");
+        status.textContent = automatic ? "英文已自动保存" : statusLabel(nextSegment?.translationStatus || segment.translationStatus);
+        status.className = `segment-status ${automatic ? "synced" : (nextSegment?.translationStatus || segment.translationStatus)}`;
       } else {
+        englishSavePending = true;
+        markEnglishChanged("英文待继续保存");
+      }
+      if (!automatic && result.build && !result.build.skipped) {
+        toast(result.build.success ? "英文修改已写入 TeX，PDF 已更新。" : "英文修改已写入 TeX，但编译仍有错误。", result.build.success ? "success" : "error");
+      } else if (!automatic) {
         toast("英文修改已写入 TeX。需要更新 PDF 时请点击“编译全文”。", "success");
       }
+      saved = true;
     } catch (error) {
       if (error.status === 409 && error.payload?.code === "LATEX_TOKEN_LOSS" && !force) {
-        const confirmed = window.confirm(`修改删除了 LaTeX 标记：\n${error.payload.details.missingTokens.join("\n")}\n\n仍然保存吗？`);
-        if (confirmed) return saveEnglish(true);
+        const missingTokens = error.payload.details?.missingTokens || [];
+        const confirmed = window.confirm(`修改删除了 LaTeX 标记：\n${missingTokens.join("\n")}\n\n如果这是你主动删除的内容，可以继续保存。仍然写入 TeX 吗？`);
+        if (confirmed) {
+          forceRetry = true;
+        } else {
+          markEnglishChanged("英文未保存：等待确认");
+        }
       } else {
+        markEnglishChanged("英文保存失败");
         toast(error.message, "error", 5200);
       }
     } finally {
+      englishSaveInFlight = false;
       setBusy(saveEnglishButton, false);
+      if (!forceRetry && englishSavePending) {
+        englishSavePending = false;
+        scheduleEnglishAutosave(250);
+      }
     }
+    if (forceRetry) return saveEnglish(true, { automatic });
+    return saved;
   }
 
   saveEnglishButton.addEventListener("click", () => saveEnglish(false));
   addParagraphButton.addEventListener("click", () => openParagraphDialog(segment));
   revertButton.addEventListener("click", () => {
+    const timerKey = segmentEnglishSaveTimerKey(segment);
+    window.clearTimeout(state.saveTimers.get(timerKey));
+    state.saveTimers.delete(timerKey);
+    englishSavePending = false;
     english.value = segment.english;
     fitSegmentRow(row);
     english.classList.remove("changed");
@@ -2660,8 +4437,9 @@ function createSegmentRow(segment) {
     status.className = `segment-status ${segment.translationStatus}`;
   });
   deleteParagraphButton.addEventListener("click", async () => {
-    const confirmed = window.confirm("删除当前段落会同时移除英文 TeX 内容和中文工作稿，且无法撤销。继续吗？");
+    const confirmed = window.confirm("删除当前段落会同时移除英文 TeX 内容和中文工作稿，可在之后按 Ctrl+Z 撤销。继续吗？");
     if (!confirmed) return;
+    clearSegmentSaveTimers(segment);
     setBusy(deleteParagraphButton, true);
     try {
       const result = await api("/api/segment/delete", {
@@ -2669,13 +4447,14 @@ function createSegmentRow(segment) {
         body: JSON.stringify({
           file: segment.file,
           index: segment.index,
-          sourceHash: segment.sourceHash
+          sourceHash: latestSourceHash()
         })
       });
       state.currentDocument = result.document;
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
+      invalidateReferences();
       scheduleProjectRefresh();
       toast("段落已删除。", "success");
     } catch (error) {
@@ -2688,7 +4467,7 @@ function createSegmentRow(segment) {
     type: "segment",
     file: segment.file,
     index: segment.index,
-    sourceHash: segment.sourceHash
+    sourceHash: latestSourceHash()
   });
   return row;
 }
@@ -2987,6 +4766,7 @@ async function submitNewParagraph(event) {
     renderSegments();
     scheduleFastPreview(result.document.file, 0);
     updateBuild(result.build);
+    invalidateReferences();
     scheduleProjectRefresh();
     toast("新段落已生成并插入。", "success");
   } catch (error) {
@@ -3070,6 +4850,7 @@ function applyFigureInsertionResult(result) {
   const previewFile = result.document?.file || result.source?.file || state.currentFile || state.sourceFile;
   if (previewFile?.toLowerCase().endsWith(".tex")) scheduleFastPreview(previewFile, 0);
   updateBuild(result.build);
+  invalidateReferences();
   scheduleProjectRefresh();
 }
 
@@ -3204,13 +4985,15 @@ function renderSegments() {
   }
   fitAllSegmentRows();
   renderDocumentList();
+  updateTranslateFileButton();
   refreshIcons();
 }
 
 async function loadDocument(file) {
   state.currentFile = file;
+  state.currentDocument = null;
   state.currentSectionId = null;
-  hideFileTranslationProgress();
+  renderFileTranslationProgress(file);
   elements.segmentList.innerHTML = '<div class="empty-state">正在读取段落...</div>';
   try {
     state.currentDocument = await api(`/api/document?file=${encodeURIComponent(file)}`);
@@ -3361,6 +5144,7 @@ function selectSourceSearchMatch(index) {
   elements.sourceEditor.scrollTop = Math.max(0, (line - 4) * lineHeight);
   elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
   elements.sourceSearchCount.textContent = `${state.sourceSearchIndex + 1} / ${matches.length}`;
+  flashSourceSelection();
   updateSourceStatus();
 }
 
@@ -3453,7 +5237,7 @@ async function loadSourceFile(file, { force = false } = {}) {
 }
 
 async function saveSourceFile(options = {}) {
-  const deferCompile = options.deferCompile ?? (state.project?.config?.autoCompile !== true);
+  const deferCompile = options.deferCompile ?? true;
   const quiet = options.quiet === true;
   if (!state.sourceFile || !state.sourceDirty) return true;
   const button = elements.saveSourceButton;
@@ -3467,7 +5251,8 @@ async function saveSourceFile(options = {}) {
           ? elements.sourceEditor.value.replace(/\n/g, "\r\n")
           : elements.sourceEditor.value,
         sourceHash: state.sourceHash,
-        deferCompile
+        deferCompile,
+        refreshDocument: options.refreshDocument === true
       })
     });
     state.sourceHash = result.source.sourceHash;
@@ -3478,10 +5263,12 @@ async function saveSourceFile(options = {}) {
     updateBuild(result.build);
     const savedFile = result.source.file;
     if (result.project) state.project = result.project;
-    scheduleProjectRefresh(900);
+    invalidateReferences();
     if (result.document && savedFile === state.currentFile) {
       state.currentDocument = result.document;
       renderSegments();
+    } else if (savedFile === state.currentFile) {
+      state.currentDocument = null;
     }
     if (!quiet) {
       const kind = state.sourceFile.toLowerCase().endsWith(".bib") ? "Bib" : "TeX";
@@ -3715,19 +5502,44 @@ async function compilePaper() {
   }
 }
 
+async function changeGitRemoteTarget(event) {
+  const remoteName = String(event.currentTarget.value || "");
+  if (!remoteName || remoteName === state.gitRemoteName) return;
+  const selectedLabel = event.currentTarget.selectedOptions[0]?.textContent || remoteName;
+  event.currentTarget.disabled = true;
+  try {
+    await api("/api/projects/git/default", {
+      method: "POST",
+      body: JSON.stringify({ projectRoot: state.project.config.projectRoot, remoteName })
+    });
+    await refreshProject({ remoteName });
+    toast(`默认同步目标已切换为 ${selectedLabel}。`, "success", 3600);
+  } catch (error) {
+    updateProjectHeader();
+    toast(error.message, "error", 5200);
+  }
+}
+
 async function pullPaper() {
   if (state.sourceDirty) {
     toast("请先保存或放弃源码修改，再拉取远端版本。", "error", 5200);
     return;
   }
   const button = document.querySelector("#pullButton");
+  const remoteName = state.gitRemoteName;
+  const remoteLabel = state.project.git.remoteLabel || "远端仓库";
   setBusy(button, true);
   try {
-    await api("/api/git/pull", { method: "POST", body: "{}" });
-    await refreshProject({ preserveDocument: false });
+    const result = await api("/api/git/pull", {
+      method: "POST",
+      body: JSON.stringify({ remoteName })
+    });
+    if (result.project) await applyProjectPayload(result.project, { preserveDocument: false });
+    else await refreshProject({ preserveDocument: false });
     await compilePaper();
-    toast("已拉取远端仓库的最新版本。", "success");
+    toast(`已从 ${remoteLabel} 拉取最新版本。`, "success");
   } catch (error) {
+    if (await resolveGitSyncConflictFromError(error, "pull")) return;
     toast(error.message, "error", 5200);
   } finally {
     setBusy(button, false);
@@ -3777,33 +5589,174 @@ function chooseGitPushFiles(preview) {
   });
 }
 
+function finishGitConflictSelection(value) {
+  const resolve = state.gitConflictResolver;
+  state.gitConflictResolver = null;
+  if (elements.gitConflictDialog.open) elements.gitConflictDialog.close();
+  if (resolve) resolve(value);
+}
+
+function renderConflictSnippet(title, snippet, className = "") {
+  const panel = document.createElement("div");
+  panel.className = `git-conflict-snippet ${className}`.trim();
+  const label = document.createElement("div");
+  label.className = "git-conflict-snippet-title";
+  label.textContent = title;
+  const pre = document.createElement("pre");
+  pre.textContent = snippet || "（没有可预览的文本内容）";
+  panel.append(label, pre);
+  return panel;
+}
+
+function chooseGitSyncConflict(details = {}) {
+  const files = details.files || [];
+  const autoResolved = details.autoResolvedFiles || [];
+  elements.gitConflictList.replaceChildren();
+  elements.gitConflictMeta.textContent = autoResolved.length
+    ? `已按更新时间自动处理 ${autoResolved.length} 个文件；还有 ${files.length} 个文件需要手动选择`
+    : `${details.remoteLabel || "Overleaf"} 与本地共有 ${files.length} 个冲突文件，无法按更新时间判断`;
+  files.forEach((item, index) => {
+    const row = document.createElement("section");
+    row.className = "git-conflict-row";
+    row.dataset.file = item.file;
+    const header = document.createElement("div");
+    header.className = "git-conflict-row-header";
+    const pathNode = document.createElement("div");
+    pathNode.className = "git-conflict-path";
+    pathNode.textContent = item.file;
+    const sizeNode = document.createElement("div");
+    sizeNode.className = "git-conflict-size";
+    const timeNote = item.localUpdatedAt || item.remoteUpdatedAt
+      ? ` · 本地 ${item.localUpdatedAt || "未知"} / ${details.remoteLabel || "Overleaf"} ${item.remoteUpdatedAt || "未知"}`
+      : "";
+    sizeNode.textContent = `本地 ${item.localBytes || 0} B / ${details.remoteLabel || "Overleaf"} ${item.remoteBytes || 0} B${timeNote}`;
+    header.append(pathNode, sizeNode);
+
+    const options = document.createElement("div");
+    options.className = "git-conflict-options";
+    const localOption = document.createElement("label");
+    const localRadio = document.createElement("input");
+    localRadio.type = "radio";
+    localRadio.name = `git-conflict-${index}`;
+    localRadio.value = "local";
+    localRadio.checked = true;
+    localOption.append(localRadio, document.createTextNode("保留本地版本"));
+    const remoteOption = document.createElement("label");
+    const remoteRadio = document.createElement("input");
+    remoteRadio.type = "radio";
+    remoteRadio.name = `git-conflict-${index}`;
+    remoteRadio.value = "remote";
+    remoteOption.append(remoteRadio, document.createTextNode(`保留 ${details.remoteLabel || "Overleaf"} 版本`));
+    options.append(localOption, remoteOption);
+
+    const snippets = document.createElement("div");
+    snippets.className = "git-conflict-snippets";
+    if (item.diffSnippet) snippets.append(renderConflictSnippet("冲突位置", item.diffSnippet, "wide"));
+    snippets.append(
+      renderConflictSnippet("本地版本", item.localSnippet, "local"),
+      renderConflictSnippet(`${details.remoteLabel || "Overleaf"} 版本`, item.remoteSnippet, "remote")
+    );
+
+    row.append(header, options, snippets);
+    elements.gitConflictList.append(row);
+  });
+  if (!elements.gitConflictDialog.open) elements.gitConflictDialog.showModal();
+  refreshIcons();
+  return new Promise((resolve) => {
+    state.gitConflictResolver = resolve;
+  });
+}
+
+async function resolveGitSyncConflictFromError(error, operation) {
+  if (error.status !== 409 || error.payload?.code !== "GIT_SYNC_CONFLICT") return false;
+  const details = error.payload.details || {};
+  const choices = await chooseGitSyncConflict(details);
+  if (!choices) {
+    toast("已取消冲突合并。本地内容和远端内容都没有被覆盖。", "error", 5600);
+    return true;
+  }
+  toast("正在按你的选择合并冲突...", "success", 3600);
+  const result = await api("/api/git/resolve-conflict", {
+    method: "POST",
+    body: JSON.stringify({
+      operation: details.operation || operation,
+      files: choices,
+      remoteName: details.remoteName || state.gitRemoteName,
+      message: operation === "push"
+        ? "Resolve remote conflict before pushing"
+        : "Resolve remote conflict after pulling"
+    })
+  });
+  updateBuild(result.build);
+  if (result.project) await applyProjectPayload(result.project, { preserveDocument: false });
+  else await refreshProject({ preserveDocument: false });
+  toast(
+    operation === "push"
+      ? (result.pushed ? `已按选择合并并推送到 ${details.remoteLabel || "远端仓库"}。` : "已按选择合并，没有新的提交需要推送。")
+      : `已按选择合并 ${details.remoteLabel || "远端仓库"} 的修改。`,
+    "success",
+    6200
+  );
+  return true;
+}
+
+function summarizeChangedGitFiles(files = [], limit = 3) {
+  const names = files.map((file) => String(file || "").replace(/^[ MADRCU?!]{1,2}\s+/, "").trim()).filter(Boolean);
+  if (names.length <= limit) return names.join("、");
+  return `${names.slice(0, limit).join("、")} 等`;
+}
+
 async function pushPaper() {
   if (state.sourceDirty) {
     toast("请先保存源码修改，再推送论文。", "error", 5200);
     return;
   }
   const button = document.querySelector("#pushButton");
+  const remoteName = state.gitRemoteName;
+  const remoteLabel = state.project.git.remoteLabel || "远端仓库";
   let selection = null;
   setBusy(button, true);
   try {
-    const preview = await api("/api/git/push-preview");
+    toast("正在检查待推送文件...", "success", 2400);
+    const preview = await api(`/api/git/push-preview?remoteName=${encodeURIComponent(remoteName)}`);
     if (preview.required) {
+      toast("首次推送需要确认上传文件，请在弹窗中点击“确认并推送”。", "success", 5200);
       selection = await chooseGitPushFiles(preview);
-      if (!selection) return;
+      if (!selection) {
+        toast("已取消推送，本地文件没有上传。", "error", 4200);
+        return;
+      }
     }
+    toast(`正在提交并推送到 ${remoteLabel}...`, "success", 4200);
     const result = await api("/api/git/push", {
       method: "POST",
       body: JSON.stringify({
         message: "Update bilingual paper draft",
         confirmed: Boolean(selection),
-        files: selection || []
+        files: selection || [],
+        remoteName
       })
     });
     updateBuild(result.build);
-    await refreshProject();
-    toast(result.pushed ? "已推送至远端 Git 仓库。" : "没有需要推送的修改。", "success");
+    if (result.project) await applyProjectPayload(result.project);
+    else await refreshProject();
+    const git = result.project?.git || result.status || state.project?.git;
+    const pending = git?.changedFiles?.length || 0;
+    if (pending) {
+      const examples = summarizeChangedGitFiles(git.changedFiles);
+      toast(
+        result.pushed
+          ? `已推送远端，但仍有 ${pending} 个本地文件未提交：${examples}`
+          : `没有新的提交被推送，仍有 ${pending} 个本地文件未提交：${examples}`,
+        "error",
+        7600
+      );
+    } else {
+      toast(result.pushed ? `已推送至 ${remoteLabel}。` : `没有需要推送到 ${remoteLabel} 的修改。`, "success", 5200);
+    }
   } catch (error) {
     updateBuild(error.payload?.details);
+    if (await resolveGitSyncConflictFromError(error, "push")) return;
     toast(error.message, "error", 5600);
   } finally {
     setBusy(button, false);
@@ -3811,156 +5764,81 @@ async function pushPaper() {
 }
 
 async function translateCurrentFile() {
-  const button = document.querySelector("#translateFileButton");
   if (!state.currentFile || !state.currentDocument) return;
+  const translationFile = state.currentFile;
+  if (state.fileTranslationJobs.has(translationFile)) {
+    state.visibleTranslationJobFile = translationFile;
+    renderFileTranslationProgress(translationFile);
+    toast(`${translationFile} 正在后台翻译，可以继续查看或编辑其他 TeX。`, "success", 4200);
+    return;
+  }
   const pendingIds = state.currentDocument.segments
     .map((segment) => segment.id);
   if (!pendingIds.length) {
     toast("当前 TeX 文件没有可翻译的段落。", "success");
     return;
   }
-  const currentFileLabel = state.currentFile;
+  const currentFileLabel = translationFile;
   const total = pendingIds.length;
-  let completed = 0;
-  let translated = 0;
-  let skipped = 0;
-  setBusy(button, true);
-  setFileTranslationProgress(0, total, `${currentFileLabel} · 正在提取术语表...`);
+  const job = {
+    file: translationFile,
+    total,
+    completed: 0,
+    translated: 0,
+    skipped: 0,
+    label: `${currentFileLabel} · 正在提取术语表...`,
+    statusClass: ""
+  };
+  state.fileTranslationJobs.set(translationFile, job);
+  state.visibleTranslationJobFile = translationFile;
+  renderFileTranslationProgress(translationFile);
   try {
     const terminology = await api("/api/file/terminology", {
       method: "POST",
-      body: JSON.stringify({ file: state.currentFile })
+      body: JSON.stringify({ file: translationFile })
     });
-    setFileTranslationProgress(0, total, `${currentFileLabel} · 术语表 ${terminology.entries?.length || 0} 条，正在准备翻译...`);
+    job.label = `${currentFileLabel} · 术语表 ${terminology.entries?.length || 0} 条，正在准备翻译...`;
+    renderFileTranslationProgress(translationFile);
     for (let offset = 0; offset < pendingIds.length; offset += 1) {
       const segmentIds = pendingIds.slice(offset, offset + 1);
       const end = Math.min(offset + segmentIds.length, total);
-      setFileTranslationProgress(completed, total, `${currentFileLabel} · 正在翻译第 ${offset + 1}-${end} 段...`);
+      job.label = `${currentFileLabel} · 正在翻译第 ${offset + 1}-${end} 段...`;
+      renderFileTranslationProgress(translationFile);
       const result = await api("/api/file/translate-to-chinese", {
         method: "POST",
-        body: JSON.stringify({ file: state.currentFile, segmentIds, force: true })
+        body: JSON.stringify({ file: translationFile, segmentIds, force: true })
       });
-      state.currentDocument = result.document;
-      completed += result.progress?.attempted ?? segmentIds.length;
-      translated += result.progress?.translated ?? 0;
-      skipped += result.progress?.skipped ?? 0;
-      setFileTranslationProgress(completed, total, `${currentFileLabel} · 已处理 ${completed} 个段落`);
-    }
-    renderSegments();
-    scheduleProjectRefresh();
-    if (skipped) {
-      setFileTranslationProgress(completed, total, `翻译完成，${skipped} 段未收到有效结果`, "warning");
-      toast(`中文工作稿已更新，模型没有返回其中 ${skipped} 个段落的有效翻译。`, "error", 5600);
-    } else {
-      setFileTranslationProgress(completed, total, `翻译完成，共更新 ${translated} 个段落`);
-      toast("当前文件的中文工作稿已更新。", "success");
-    }
-  } catch (error) {
-    if (state.currentDocument) renderSegments();
-    setFileTranslationProgress(completed, total, `翻译中断：${error.message}`, "error");
-    toast(error.message, "error", 5600);
-  } finally {
-    setBusy(button, false);
-  }
-}
-
-function renderReview(review) {
-  elements.reviewSummary.textContent = review.summary || "";
-  elements.reviewMeta.textContent = review.createdAt
-    ? `${review.issues.length} 项 · ${new Date(review.createdAt).toLocaleString()}`
-    : "尚未运行";
-  elements.reviewList.replaceChildren();
-  if (!review.issues?.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "暂无审校问题";
-    elements.reviewList.append(empty);
-    return;
-  }
-  for (const issue of review.issues) {
-    const item = document.createElement("article");
-    item.className = `review-item ${issue.severity || "low"} ${issue.status === "applied" ? "applied" : ""}`;
-    item.innerHTML = `
-      <div class="review-header">
-        <span class="review-category"></span>
-        <span class="review-location"></span>
-      </div>
-      <div class="review-body">
-        <div class="review-message"></div>
-        <div class="review-revision"></div>
-        <div class="review-actions">
-          <button class="button secondary locate-button" type="button"><i data-lucide="locate-fixed"></i><span>定位</span></button>
-          <button class="button primary apply-button" type="button"><i data-lucide="check-check"></i><span>应用修改</span></button>
-        </div>
-      </div>
-    `;
-    item.querySelector(".review-category").textContent = `${issue.severity || "low"} · ${issue.category || "clarity"}`;
-    item.querySelector(".review-location").textContent = issue.id;
-    item.querySelector(".review-message").textContent = issue.message || "";
-    item.querySelector(".review-revision").textContent = issue.revisedEnglish || "";
-    const applyButton = item.querySelector(".apply-button");
-    if (issue.status === "applied") applyButton.disabled = true;
-    item.querySelector(".locate-button").addEventListener("click", async () => {
-      const match = issue.id.match(/^(.*):(\d+)$/);
-      if (!match) return;
-      setMode("edit");
-      await loadDocument(match[1]);
-      const row = elements.segmentList.querySelector(`[data-segment-id="${CSS.escape(issue.id)}"]`);
-      row?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-    applyButton.addEventListener("click", async () => {
-      setBusy(applyButton, true);
-      try {
-        let approveCommands = false;
-        let result;
-        while (!result) {
-          try {
-            result = await api("/api/review/apply", {
-              method: "POST",
-              body: JSON.stringify({ issueId: issue.issueId, approveCommands })
-            });
-          } catch (error) {
-            if (confirmUnexpectedLatexCommands(error)) {
-              approveCommands = true;
-              continue;
-            }
-            throw error;
-          }
-        }
-        renderReview(result.review);
-        updateBuild(result.build);
-        await refreshProject();
-        toast("审校修改已应用。", "success");
-      } catch (error) {
-        toast(error.payload?.code === "DANGEROUS_LATEX_COMMANDS" ? dangerousLatexMessage(error) : error.message, "error", 6200);
-      } finally {
-        setBusy(applyButton, false);
+      if (state.currentFile === translationFile) {
+        state.currentDocument = result.document;
+        renderSegments();
       }
+      job.completed += result.progress?.attempted ?? segmentIds.length;
+      job.translated += result.progress?.translated ?? 0;
+      job.skipped += result.progress?.skipped ?? 0;
+      job.label = `${currentFileLabel} · 已处理 ${job.completed} 个段落`;
+      renderFileTranslationProgress(translationFile);
+    }
+    scheduleProjectRefresh();
+    if (job.skipped) {
+      finishFileTranslationJob(translationFile, {
+        label: `${currentFileLabel} · 翻译完成，${job.skipped} 段未收到有效结果`,
+        statusClass: "warning"
+      });
+      toast(`${currentFileLabel} 中文工作稿已更新，模型没有返回其中 ${job.skipped} 个段落的有效翻译。`, "error", 5600);
+    } else {
+      finishFileTranslationJob(translationFile, {
+        label: `${currentFileLabel} · 翻译完成，共更新 ${job.translated} 个段落`,
+        statusClass: ""
+      });
+      toast(`${currentFileLabel} 的中文工作稿已更新。`, "success");
+    }
+  } catch (error) {
+    if (state.currentFile === translationFile && state.currentDocument) renderSegments();
+    finishFileTranslationJob(translationFile, {
+      label: `${currentFileLabel} · 翻译中断：${error.message}`,
+      statusClass: "error"
     });
-    elements.reviewList.append(item);
-  }
-  refreshIcons();
-}
-
-async function loadReview() {
-  try {
-    renderReview(await api("/api/review"));
-  } catch (error) {
-    toast(error.message, "error");
-  }
-}
-
-async function runReview() {
-  const button = document.querySelector("#runReviewButton");
-  setBusy(button, true);
-  elements.reviewMeta.textContent = "正在检查全文...";
-  try {
-    renderReview(await api("/api/review", { method: "POST", body: "{}" }));
-    toast("全文英文审校完成。", "success");
-  } catch (error) {
     toast(error.message, "error", 5600);
-  } finally {
-    setBusy(button, false);
   }
 }
 
@@ -4292,18 +6170,39 @@ async function applyTargetFormat() {
 
 async function exportPdf() {
   const name = state.project?.config?.mainTex?.replace(/\.tex$/i, ".pdf") || "paper.pdf";
+  const exportToken = ++state.pdfExportToken;
+  const previousStatus = elements.pageStatus.textContent;
+  const exportStatuses = new Set(["正在保存 PDF...", "PDF 已保存", "已取消保存 PDF", "PDF 下载已开始", "PDF 保存失败"]);
+  setBusy(elements.exportPdfButton, true);
+  elements.pageStatus.textContent = "正在保存 PDF...";
   try {
     if (window.paperBridgeDesktop) {
       const destination = await window.paperBridgeDesktop.exportPdf(name);
-      if (destination) toast(`PDF 已导出到 ${destination}`, "success", 5200);
+      if (destination) {
+        elements.pageStatus.textContent = "PDF 已保存";
+        toast(`PDF 已导出到 ${destination}`, "success", 5200);
+      } else {
+        elements.pageStatus.textContent = "已取消保存 PDF";
+        toast("已取消保存 PDF。", "success", 2600);
+      }
       return;
     }
     const link = document.createElement("a");
     link.href = "/api/pdf";
     link.download = name;
     link.click();
+    elements.pageStatus.textContent = "PDF 下载已开始";
+    toast("PDF 下载已开始。", "success", 3200);
   } catch (error) {
+    elements.pageStatus.textContent = "PDF 保存失败";
     toast(error.message, "error");
+  } finally {
+    setBusy(elements.exportPdfButton, false);
+    window.setTimeout(() => {
+      if (state.pdfExportToken === exportToken && exportStatuses.has(elements.pageStatus.textContent)) {
+        elements.pageStatus.textContent = previousStatus;
+      }
+    }, 2200);
   }
 }
 
@@ -4315,17 +6214,20 @@ function setMode(mode, { loadCurrent = true } = {}) {
     setSourceDirty(false);
   }
   state.mode = mode;
+  const referencesOpen = mode === "references";
   document.querySelectorAll(".mode-button").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
-  elements.editView.classList.toggle("hidden", mode !== "edit");
+  elements.workspace.classList.toggle("references-open", referencesOpen);
+  elements.editView.classList.toggle("hidden", mode !== "edit" && !referencesOpen);
   elements.sourceView.classList.toggle("hidden", mode !== "source");
-  elements.reviewView.classList.toggle("hidden", mode !== "review");
+  elements.referencesView.classList.toggle("hidden", !referencesOpen);
   elements.formatView.classList.toggle("hidden", mode !== "format");
+  elements.previewPanel.classList.toggle("hidden", referencesOpen);
   if (mode === "source") {
     renderSourceFileOptions(loadCurrent ? state.currentFile : state.sourceFile);
     if (loadCurrent) void loadSourceFile(elements.sourceFileSelect.value, { force: true });
   }
   if (mode === "edit" && state.currentFile && loadCurrent) void loadDocument(state.currentFile);
-  if (mode === "review") loadReview();
+  if (mode === "references") void loadReferences();
   if (mode === "format") loadLatestFormatJob();
   return true;
 }
@@ -4401,6 +6303,7 @@ function openSettings() {
   document.querySelector("#chooseStorageFolderButton").disabled = config.canChangeStorage === false;
   document.querySelector("#migrateStorageButton").disabled = true;
   document.querySelector("#projectRootInput").value = config.projectRoot;
+  document.querySelector("#projectNameInput").value = config.projectName || fileLabel(config.projectRoot || "论文项目");
   const overleafToken = document.querySelector("#overleafTokenInput");
   overleafToken.value = "";
   overleafToken.placeholder = config.hasOverleafToken ? "已保存，留空保持不变" : "用于自动拉取和推送";
@@ -4521,6 +6424,7 @@ async function saveSettings({ close = true } = {}) {
   let previous = state.project.config;
   let projectRoot = document.querySelector("#projectRootInput").value.trim();
   const mainTex = document.querySelector("#mainTexInput").value.trim();
+  const projectName = document.querySelector("#projectNameInput").value.trim();
   const storageRoot = document.querySelector("#storageRootInput").value.trim();
   const storageChanged = state.storageRootSelected && storageRoot && storageRoot !== previous.storageRoot;
   if ((projectRoot !== previous.projectRoot || mainTex !== previous.mainTex) && state.sourceDirty) {
@@ -4539,7 +6443,7 @@ async function saveSettings({ close = true } = {}) {
       gitUsername: document.querySelector("#gitUsernameInput").value.trim(),
       gitToken: document.querySelector("#gitTokenInput").value.trim(),
       translation: collectProvider("translation"),
-      review: collectProvider("review")
+      format: collectProvider("format")
     })
   });
   if (projectRoot !== previous.projectRoot || mainTex !== previous.mainTex) {
@@ -4548,6 +6452,10 @@ async function saveSettings({ close = true } = {}) {
       body: JSON.stringify({ projectRoot, mainTex })
     });
   }
+  await api("/api/project/name", {
+    method: "POST",
+    body: JSON.stringify({ projectRoot, mainTex, name: projectName })
+  });
   state.project.config = next;
   await refreshProject({ preserveDocument: false });
   if (close) elements.settingsDialog.close();
@@ -4572,8 +6480,24 @@ async function testProvider(purpose, button) {
 
 function bindEvents() {
   ensureSourceSearchControls();
+  elements.undoButton.addEventListener("click", () => void undoLastChange());
   document.querySelector("#compileButton").addEventListener("click", compilePaper);
   elements.previewCompileButton.addEventListener("click", compilePaper);
+  elements.gitRemoteSelect.addEventListener("change", changeGitRemoteTarget);
+  document.querySelector("#closeGitManagerButton").addEventListener("click", closeGitManager);
+  document.querySelector("#addGitRemoteButton").addEventListener("click", () => showGitRemoteForm());
+  document.querySelector("#cancelGitRemoteButton").addEventListener("click", hideGitRemoteForm);
+  document.querySelector("#testGitRemoteButton").addEventListener("click", testGitRemoteForm);
+  elements.gitRemoteProvider.addEventListener("change", () => updateGitRemoteProviderForm({ preserveCredential: false }));
+  elements.gitRemoteForm.addEventListener("submit", saveGitRemote);
+  document.querySelector("#addGitCredentialButton").addEventListener("click", () => showGitCredentialForm());
+  document.querySelector("#cancelGitCredentialButton").addEventListener("click", hideGitCredentialForm);
+  elements.gitCredentialProvider.addEventListener("change", updateGitCredentialProviderForm);
+  elements.gitCredentialForm.addEventListener("submit", saveGitCredential);
+  elements.gitManagerDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeGitManager();
+  });
   document.querySelector("#pullButton").addEventListener("click", pullPaper);
   document.querySelector("#pushButton").addEventListener("click", pushPaper);
   document.querySelector("#translateFileButton").addEventListener("click", translateCurrentFile);
@@ -4593,6 +6517,44 @@ function bindEvents() {
   elements.addTerminologyButton.addEventListener("click", addTerminologyEntry);
   elements.saveTerminologyButton.addEventListener("click", saveTerminology);
   elements.regenerateTerminologyButton.addEventListener("click", regenerateTerminology);
+  elements.applyTerminologyDefinitionsButton.addEventListener("click", applyTerminologyDefinitions);
+  elements.refreshReferencesButton.addEventListener("click", () => loadReferences({ force: true }));
+  elements.addReferenceButton.addEventListener("click", openReferenceAddDialog);
+  elements.referenceLookupButton.addEventListener("click", lookupNewReference);
+  elements.referenceAddForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (event.submitter?.id === "referenceLookupButton") void lookupNewReference();
+    else void addNewReference();
+  });
+  elements.referenceAddKey.addEventListener("input", () => {
+    const key = elements.referenceAddKey.value.trim();
+    if (!key || !elements.referenceAddBib.value.trim()) return;
+    elements.referenceAddBib.value = elements.referenceAddBib.value.replace(
+      /^(@[A-Za-z]+\s*[({]\s*)[^,\s]+(\s*,)/,
+      `$1${key}$2`
+    );
+  });
+  elements.closeReferenceAddButton.addEventListener("click", closeReferenceAddDialog);
+  elements.cancelReferenceAddButton.addEventListener("click", closeReferenceAddDialog);
+  elements.referenceAddDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeReferenceAddDialog();
+  });
+  elements.referencesSearch.addEventListener("input", renderReferences);
+  elements.insertSelectedReferenceButton.addEventListener("click", () => {
+    const entry = selectedReference();
+    if (!entry) {
+      toast("请先选择一篇文献。", "error");
+      return;
+    }
+    insertCitationAtCurrentTarget(entry);
+  });
+  elements.closeReferencesButton.addEventListener("click", () => setMode("edit", { loadCurrent: false }));
+  elements.referenceInsertSearch.addEventListener("input", renderReferenceInsertList);
+  document.querySelector("#closeReferenceInsertButton").addEventListener("click", closeReferenceInsertDialog);
+  document.querySelector("#cancelReferenceInsertButton").addEventListener("click", closeReferenceInsertDialog);
+  elements.referenceInsertDialog.addEventListener("cancel", () => closeCitationContextMenu());
+  elements.referenceInsertForm.addEventListener("submit", (event) => event.preventDefault());
   document.querySelector("#decreaseFontButton").addEventListener("click", () => changeEditorFont(-1));
   document.querySelector("#increaseFontButton").addEventListener("click", () => changeEditorFont(1));
   elements.workspaceSplitHandle.addEventListener("pointerdown", (event) => {
@@ -4649,7 +6611,6 @@ function bindEvents() {
     state.bilingualSplit = Math.min(70, Math.max(30, state.bilingualSplit + (event.key === "ArrowRight" ? 2 : -2)));
     applyEditorPreferences();
   });
-  document.querySelector("#runReviewButton").addEventListener("click", runReview);
   document.querySelector("#settingsButton").addEventListener("click", openSettings);
   document.querySelector("#addProjectButton").addEventListener("click", () => openSetup(state.project, { switching: true }));
   document.querySelector("#closeSetupButton").addEventListener("click", () => elements.setupDialog.close());
@@ -4729,11 +6690,30 @@ function bindEvents() {
     event.preventDefault();
     finishGitPushSelection(null);
   });
+  elements.gitConflictForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const files = [...elements.gitConflictList.querySelectorAll(".git-conflict-row")].map((row) => ({
+      file: row.dataset.file,
+      choice: row.querySelector('input[type="radio"]:checked')?.value || "local"
+    }));
+    if (!files.length) {
+      toast("没有检测到可处理的冲突文件。", "error");
+      finishGitConflictSelection(null);
+      return;
+    }
+    finishGitConflictSelection(files);
+  });
+  document.querySelector("#closeGitConflictButton").addEventListener("click", () => finishGitConflictSelection(null));
+  document.querySelector("#cancelGitConflictButton").addEventListener("click", () => finishGitConflictSelection(null));
+  elements.gitConflictDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    finishGitConflictSelection(null);
+  });
   document.querySelector("#refreshPdfButton").addEventListener("click", () => {
     if (state.previewMode === "fast") void renderFastPreview(state.fastPreviewFile || state.currentDocument?.file || "");
     else void renderPdf();
   });
-  document.querySelector("#exportPdfButton").addEventListener("click", exportPdf);
+  elements.exportPdfButton.addEventListener("click", exportPdf);
   document.querySelector("#previousPageButton").addEventListener("click", () => movePdfPage(-1));
   document.querySelector("#nextPageButton").addEventListener("click", () => movePdfPage(1));
   document.querySelector("#zoomOutButton").addEventListener("click", () => setPdfZoom(state.pdfZoom - 10));
@@ -4741,7 +6721,7 @@ function bindEvents() {
   elements.pdfZoomValue.addEventListener("click", () => setPdfZoom(100));
   elements.translationSectionSelect.addEventListener("change", (event) => {
     state.currentSectionId = event.currentTarget.value;
-    hideFileTranslationProgress();
+    renderFileTranslationProgress(state.currentFile);
   });
   elements.sourceFileSelect.addEventListener("change", async (event) => {
     const previous = state.sourceFile;
@@ -4757,6 +6737,7 @@ function bindEvents() {
   elements.sourceEditor.addEventListener("scroll", () => {
     elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
   }, { passive: true });
+  attachCitationTarget(elements.sourceEditor);
   elements.sourceEditor.addEventListener("click", updateSourceStatus);
   elements.sourceEditor.addEventListener("keyup", updateSourceStatus);
   elements.sourceEditor.addEventListener("select", updateSourceStatus);
@@ -4804,6 +6785,19 @@ function bindEvents() {
       void saveSourceFile();
     }
   });
+  document.addEventListener("keydown", (event) => {
+    if (
+      event.defaultPrevented
+      || event.shiftKey
+      || !(event.ctrlKey || event.metaKey)
+      || event.key.toLowerCase() !== "z"
+      || document.querySelector("dialog[open]")
+    ) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("textarea, input, select, [contenteditable='true']")) return;
+    event.preventDefault();
+    if (state.undoCount) void undoLastChange();
+  });
   elements.saveSourceButton.addEventListener("click", () => saveSourceFile());
   elements.createTexFileButton.addEventListener("click", createTexFile);
   elements.modularizeButton.addEventListener("click", previewPaperStructure);
@@ -4835,7 +6829,16 @@ function bindEvents() {
   document.querySelector("#closeWarningsButton").addEventListener("click", closeBuildDrawer);
   document.querySelectorAll(".mode-button").forEach((button) => button.addEventListener("click", () => setMode(button.dataset.mode)));
   window.addEventListener("beforeunload", (event) => {
-    if (!state.sourceDirty) return;
+    if (
+      !state.sourceDirty
+      && !state.terminologyDirty
+      && !state.saveTimers.size
+      && !state.pendingWrites
+      && !state.fileTranslationJobs.size
+      && !state.segmentTranslationQueue.length
+      && !state.activeSegmentTranslations
+      && !state.undoCount
+    ) return;
     event.preventDefault();
     event.returnValue = "";
   });
@@ -4848,11 +6851,12 @@ function bindEvents() {
     }
   });
   document.querySelector("#testTranslationButton").addEventListener("click", (event) => testProvider("translation", event.currentTarget));
-  document.querySelector("#testReviewButton").addEventListener("click", (event) => testProvider("review", event.currentTarget));
+  document.querySelector("#testFormatButton").addEventListener("click", (event) => testProvider("format", event.currentTarget));
 }
 
 async function initialize() {
   bindEvents();
+  window.paperBridgeDesktop?.onCloseRequest?.(handleDesktopCloseRequest);
   renderFormatFiles();
   applyEditorPreferences(false);
   applyWorkspaceSplit(false);
@@ -4862,7 +6866,6 @@ async function initialize() {
   try {
     const ready = await refreshProject({ preserveDocument: false });
     updateWarnings([]);
-    if (ready) await loadReview();
   } catch (error) {
     toast(error.message, "error", 8000);
     elements.segmentList.innerHTML = '<div class="empty-state">无法打开论文项目</div>';

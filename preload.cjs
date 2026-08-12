@@ -6,5 +6,18 @@ contextBridge.exposeInMainWorld("paperBridgeDesktop", {
   chooseZip: () => ipcRenderer.invoke("paperbridge:choose-zip"),
   chooseFormatFiles: () => ipcRenderer.invoke("paperbridge:choose-format-files"),
   exportPdf: (defaultName) => ipcRenderer.invoke("paperbridge:export-pdf", defaultName),
-  openExternal: (url) => ipcRenderer.invoke("paperbridge:open-external", url)
+  openExternal: (url) => ipcRenderer.invoke("paperbridge:open-external", url),
+  onCloseRequest: (callback) => {
+    ipcRenderer.on("paperbridge:close-request", async (_event, requestId, save) => {
+      try {
+        const result = await callback(save === true);
+        ipcRenderer.send("paperbridge:close-response", requestId, result);
+      } catch (error) {
+        ipcRenderer.send("paperbridge:close-response", requestId, {
+          ok: false,
+          message: error?.message || "保存退出状态时发生未知错误。"
+        });
+      }
+    });
+  }
 });

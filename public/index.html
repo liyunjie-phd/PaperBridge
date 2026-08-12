@@ -22,11 +22,18 @@
         <span class="status-dot"></span>
         <span>检查同步状态</span>
       </div>
+      <label class="git-remote-target hidden" id="gitRemoteTarget" title="选择拉取和推送的目标仓库">
+        <span>同步到</span>
+        <select id="gitRemoteSelect" aria-label="Git 同步目标"></select>
+      </label>
       <button class="button secondary" id="pullButton" title="从远端 Git 仓库拉取最新版本">
         <i data-lucide="download"></i><span>拉取</span>
       </button>
       <button class="button secondary" id="compileButton" title="一键编译全文并刷新 PDF">
         <i data-lucide="hammer"></i><span>编译全文</span>
+      </button>
+      <button class="icon-button undo-button" id="undoButton" type="button" title="没有可撤销的操作" disabled>
+        <i data-lucide="undo-2"></i><span class="undo-count hidden" id="undoCount">0</span>
       </button>
       <button class="button primary" id="pushButton" title="编译、提交并推送至远端 Git 仓库">
         <i data-lucide="upload"></i><span>推送</span>
@@ -42,7 +49,7 @@
       <div class="mode-switch" role="tablist">
         <button class="mode-button active" data-mode="edit" role="tab">编辑</button>
         <button class="mode-button" data-mode="source" role="tab">TeX</button>
-        <button class="mode-button" data-mode="review" role="tab">审校</button>
+        <button class="mode-button" data-mode="references" role="tab">文献</button>
         <button class="mode-button" data-mode="format" role="tab">格式</button>
       </div>
 
@@ -146,19 +153,41 @@
       </div>
     </section>
 
-    <section class="editor-panel review-panel hidden" id="reviewView">
+    <section class="editor-panel references-panel hidden" id="referencesView">
       <div class="panel-toolbar">
         <div>
-          <h1>全文英文审校</h1>
-          <div class="file-meta" id="reviewMeta">尚未运行</div>
+          <h1>参考文献工作台</h1>
+          <div class="file-meta" id="referencesMeta">读取当前 Bib 文件和正文引用</div>
         </div>
-        <button class="button primary" id="runReviewButton">
-          <i data-lucide="search-check"></i><span>开始审校</span>
-        </button>
+        <div class="toolbar-actions">
+          <button class="button secondary" id="refreshReferencesButton" type="button">
+            <i data-lucide="refresh-cw"></i><span>刷新文献</span>
+          </button>
+          <button class="button secondary" id="addReferenceButton" type="button">
+            <i data-lucide="plus"></i><span>新增文献</span>
+          </button>
+          <button class="button primary" id="insertSelectedReferenceButton" type="button">
+            <i data-lucide="quote"></i><span>插入到光标</span>
+          </button>
+          <button class="icon-button" id="closeReferencesButton" type="button" title="关闭参考文献，返回 PDF" aria-label="关闭参考文献，返回 PDF">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
       </div>
-      <div class="review-summary" id="reviewSummary"></div>
-      <div class="review-list" id="reviewList">
-        <div class="empty-state">暂无审校结果</div>
+      <div class="references-workbench">
+        <section class="references-list-panel">
+          <label class="references-search">
+            <i data-lucide="search"></i>
+            <input id="referencesSearch" type="search" autocomplete="off" placeholder="搜索标题、作者、方法关键词、venue、年份或 citation key">
+          </label>
+          <div class="references-alerts" id="referencesAlerts"></div>
+          <div class="references-list" id="referencesList">
+            <div class="empty-state">正在读取参考文献...</div>
+          </div>
+        </section>
+        <section class="reference-detail-panel" id="referenceDetail">
+          <div class="empty-state">选择一篇文献后查看 BibTeX 源码和字段解释。</div>
+        </section>
       </div>
     </section>
 
@@ -309,6 +338,11 @@
 
       <section class="setup-section">
         <div class="setup-section-heading"><span class="setup-step" id="setupSourceStep">2</span><strong>选择论文</strong></div>
+        <label class="field wide project-name-field">
+          <span>项目名称</span>
+          <input id="setupProjectName" type="text" maxlength="120" autocomplete="off" placeholder="例如：CEDAR INFOCOM 论文">
+          <small class="field-note">只修改 PaperBridge 中的显示名称，不会改动文件夹名或远端仓库。</small>
+        </label>
         <div class="source-switch" role="radiogroup" aria-label="论文来源">
           <label><input type="radio" name="setupSource" value="overleaf" checked><span><i data-lucide="cloud"></i>Overleaf</span></label>
           <label><input type="radio" name="setupSource" value="git"><span><i data-lucide="git-branch"></i>Git 仓库</span></label>
@@ -449,7 +483,7 @@
     <div class="dialog-header">
       <div>
         <h2>术语表</h2>
-        <div class="file-meta" id="terminologyMeta">当前 TeX 文件的固定术语</div>
+        <div class="file-meta" id="terminologyMeta">全文术语表</div>
       </div>
       <button class="icon-button" id="closeTerminologyButton" type="button" title="关闭"><i data-lucide="x"></i></button>
     </div>
@@ -462,13 +496,16 @@
         <button class="button secondary" id="regenerateTerminologyButton" type="button">
           <i data-lucide="sparkles"></i><span>从论文提取/刷新</span>
         </button>
+        <button class="button secondary" id="applyTerminologyDefinitionsButton" type="button">
+          <i data-lucide="text-cursor-input"></i><span>写入首次出现</span>
+        </button>
         <button class="button secondary" id="addTerminologyButton" type="button">
           <i data-lucide="plus"></i><span>新增术语</span>
         </button>
       </div>
-      <div class="terminology-help">这里的术语会优先用于全文翻译和单段改写。系统只从明确缩写定义和术语表格中提取，不再让 AI 自动猜测。</div>
+      <div class="terminology-help">这里的术语会优先用于全文翻译和单段改写。系统会从全文统计缩写和高频固定写法；能找到明确全称时会自动填入，找不到时会留空提醒作者补全。点击“写入首次出现”后，只会把每个缩写第一次出现的位置改成“全称（缩写）”。</div>
       <div class="terminology-list" id="terminologyList"></div>
-      <div class="terminology-empty hidden" id="terminologyEmpty">暂无术语。可以手动新增，或从论文中的缩写定义和术语表格提取。</div>
+      <div class="terminology-empty hidden" id="terminologyEmpty">暂无术语。可以手动新增，或从论文中的缩写、固定写法和术语表格提取。</div>
     </div>
     <div class="dialog-actions terminology-actions">
       <span class="terminology-status" id="terminologyStatus"></span>
@@ -477,6 +514,68 @@
         <i data-lucide="save"></i><span>保存术语表</span>
       </button>
     </div>
+  </dialog>
+
+  <dialog class="reference-insert-dialog" id="referenceInsertDialog">
+    <form class="reference-insert-form" id="referenceInsertForm">
+      <div class="dialog-header">
+        <div>
+          <h2>插入文献</h2>
+          <div class="file-meta" id="referenceInsertMeta">选择 Bib 文件中的一篇文献</div>
+        </div>
+        <button class="icon-button" id="closeReferenceInsertButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="reference-insert-body">
+        <label class="references-search">
+          <i data-lucide="search"></i>
+          <input id="referenceInsertSearch" type="search" autocomplete="off" placeholder="搜索标题、作者、方法关键词、venue、年份或 citation key">
+        </label>
+        <div class="references-list compact" id="referenceInsertList"></div>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelReferenceInsertButton" type="button">取消</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="reference-add-dialog" id="referenceAddDialog">
+    <form class="reference-add-form" id="referenceAddForm">
+      <div class="dialog-header">
+        <div>
+          <h2>新增参考文献</h2>
+          <div class="file-meta">输入 DOI 或论文链接，自动生成并确认 BibTeX</div>
+        </div>
+        <button class="icon-button" id="closeReferenceAddButton" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="reference-add-body">
+        <label class="field">
+          <span>论文链接或 DOI</span>
+          <div class="reference-add-url-row">
+            <input id="referenceAddUrl" type="url" placeholder="https://doi.org/10.xxxx/..." autocomplete="off">
+            <button class="button secondary" id="referenceLookupButton" type="button"><i data-lucide="search"></i><span>获取信息</span></button>
+          </div>
+        </label>
+        <div class="reference-add-status" id="referenceAddStatus">粘贴 DOI、doi.org 链接或论文网页链接，然后获取元数据。</div>
+        <div class="reference-add-grid">
+          <label class="field">
+            <span>写入 Bib 文件</span>
+            <select id="referenceAddBibFile"></select>
+          </label>
+          <label class="field">
+            <span>citation key</span>
+            <input id="referenceAddKey" type="text" placeholder="author2024keyword" autocomplete="off">
+          </label>
+        </div>
+        <label class="field">
+          <span>BibTeX 预览（可直接修改）</span>
+          <textarea id="referenceAddBib" class="reference-add-bib" spellcheck="false" placeholder="获取信息后显示 BibTeX"></textarea>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelReferenceAddButton" type="button">取消</button>
+        <button class="button primary" id="addReferenceButtonSubmit" type="submit">加入 Bib 文件</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog class="paragraph-dialog" id="paragraphDialog">
@@ -542,6 +641,107 @@
     </form>
   </dialog>
 
+  <dialog class="git-manager-dialog" id="gitManagerDialog">
+    <div class="git-manager-shell">
+      <div class="dialog-header">
+        <div>
+          <h2>项目 Git 管理</h2>
+          <div class="file-meta" id="gitManagerProjectMeta"></div>
+        </div>
+        <button class="icon-button" id="closeGitManagerButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+
+      <div class="git-manager-body">
+        <section class="git-manager-section">
+          <div class="git-manager-section-heading">
+            <strong>远端仓库</strong>
+            <button class="button secondary" id="addGitRemoteButton" type="button"><i data-lucide="plus"></i><span>连接远端</span></button>
+          </div>
+          <div class="git-manager-list" id="gitRemoteList"></div>
+
+          <form class="git-manager-form hidden" id="gitRemoteForm">
+            <input id="gitRemoteOriginalName" type="hidden">
+            <div class="git-manager-form-grid">
+              <label class="field">
+                <span>服务</span>
+                <select id="gitRemoteProvider">
+                  <option value="git">GitHub / GitLab</option>
+                  <option value="overleaf">Overleaf</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>远端名称</span>
+                <input id="gitRemoteName" type="text" autocomplete="off" value="paperbridge" required>
+              </label>
+              <label class="field wide">
+                <span>HTTPS 仓库或 Overleaf 项目链接</span>
+                <input id="gitRemoteUrl" type="url" autocomplete="off" required>
+              </label>
+              <label class="field wide">
+                <span>凭据配置</span>
+                <select id="gitRemoteCredential"></select>
+              </label>
+            </div>
+            <label class="toggle-row git-manager-default-toggle">
+              <input id="gitRemoteDefault" type="checkbox">
+              <span>设为该项目的默认同步目标</span>
+            </label>
+            <div class="git-manager-form-actions">
+              <button class="button secondary" id="cancelGitRemoteButton" type="button">取消</button>
+              <button class="button secondary" id="testGitRemoteButton" type="button"><i data-lucide="plug-zap"></i><span>测试连接</span></button>
+              <button class="button primary" id="saveGitRemoteButton" type="submit"><i data-lucide="save"></i><span>保存远端</span></button>
+            </div>
+          </form>
+        </section>
+
+        <section class="git-manager-section">
+          <div class="git-manager-section-heading">
+            <strong>凭据配置</strong>
+            <button class="button secondary" id="addGitCredentialButton" type="button"><i data-lucide="key-round"></i><span>新增凭据</span></button>
+          </div>
+          <div class="git-manager-list" id="gitCredentialList"></div>
+
+          <form class="git-manager-form hidden" id="gitCredentialForm">
+            <input id="gitCredentialId" type="hidden">
+            <div class="git-manager-form-grid">
+              <label class="field">
+                <span>名称</span>
+                <input id="gitCredentialName" type="text" autocomplete="off" required>
+              </label>
+              <label class="field">
+                <span>类型</span>
+                <select id="gitCredentialProvider">
+                  <option value="git">GitHub / GitLab</option>
+                  <option value="overleaf">Overleaf</option>
+                </select>
+              </label>
+              <label class="field" id="gitCredentialUsernameField">
+                <span>Git 用户名</span>
+                <input id="gitCredentialUsername" type="text" autocomplete="username">
+              </label>
+              <label class="field">
+                <span>Token</span>
+                <input id="gitCredentialToken" type="password" autocomplete="new-password">
+              </label>
+              <label class="field wide">
+                <span>使用范围</span>
+                <select id="gitCredentialScope">
+                  <option value="shared">所有项目共用</option>
+                  <option value="project">仅当前项目</option>
+                </select>
+              </label>
+            </div>
+            <div class="git-manager-form-actions">
+              <button class="button secondary" id="cancelGitCredentialButton" type="button">取消</button>
+              <button class="button primary" id="saveGitCredentialButton" type="submit"><i data-lucide="save"></i><span>保存凭据</span></button>
+            </div>
+          </form>
+        </section>
+        <div class="setup-message" id="gitManagerStatus"></div>
+      </div>
+    </div>
+  </dialog>
+
   <dialog class="git-push-dialog" id="gitPushDialog">
     <form class="git-push-form" id="gitPushForm">
       <div class="dialog-header">
@@ -561,6 +761,26 @@
       <div class="dialog-actions">
         <button class="button secondary" id="cancelGitPushButton" type="button">取消</button>
         <button class="button primary" type="submit"><i data-lucide="upload"></i><span>确认并推送</span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="git-conflict-dialog" id="gitConflictDialog">
+    <form class="git-conflict-form" id="gitConflictForm">
+      <div class="dialog-header">
+        <div>
+          <h2>选择保留哪个版本</h2>
+          <div class="file-meta" id="gitConflictMeta">本地和 Overleaf 修改了同一批文件</div>
+        </div>
+        <button class="icon-button" id="closeGitConflictButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="git-conflict-help">
+        PaperBridge 会先按更新时间自动保留更新的一边。下面这些文件无法判断时间先后，请选择保留“本地版本”或“远端版本”，确认后会自动完成合并。
+      </div>
+      <div class="git-conflict-list" id="gitConflictList"></div>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelGitConflictButton" type="button">取消</button>
+        <button class="button primary" type="submit"><i data-lucide="git-merge"></i><span>按选择合并</span></button>
       </div>
     </form>
   </dialog>
@@ -662,6 +882,11 @@
           <small class="field-note" id="storageMigrationNote">选择新的空文件夹后，点击“迁移数据目录”才会迁移配置、中文工作稿、备份和 PaperBridge 导入的项目；外部本地项目不会移动。</small>
         </label>
         <label class="field wide">
+          <span>项目名称</span>
+          <input id="projectNameInput" type="text" maxlength="120" autocomplete="off" required>
+          <small class="field-note">只修改 PaperBridge 中的显示名称，不会改动文件夹名、主 TeX 文件或 Git 远端。</small>
+        </label>
+        <label class="field wide">
           <span>论文目录</span>
           <div class="path-input-row">
             <input id="projectRootInput" type="text" autocomplete="off">
@@ -669,19 +894,20 @@
           </div>
         </label>
         <label class="field wide">
-          <span>Overleaf Git Token</span>
+          <span>默认 Overleaf Git Token（兼容设置）</span>
           <div class="path-input-row">
             <input id="overleafTokenInput" type="password" autocomplete="new-password">
             <button class="icon-button" id="openSettingsOverleafTokenButton" type="button" title="打开 Overleaf Token 设置"><i data-lucide="external-link"></i></button>
             <button class="icon-button" id="clearOverleafTokenButton" type="button" title="清除已保存的 Overleaf Token"><i data-lucide="trash-2"></i></button>
           </div>
+          <small class="field-note">共享凭据和项目专用凭据请在左侧项目旁点击“连接远端”或“管理”。这里的 Token 继续作为旧项目的默认凭据。</small>
         </label>
         <label class="field">
-          <span>GitHub / GitLab 用户名</span>
+          <span>默认 GitHub / GitLab 用户名</span>
           <input id="gitUsernameInput" type="text" autocomplete="username">
         </label>
         <label class="field">
-          <span>GitHub / GitLab Token</span>
+          <span>默认 GitHub / GitLab Token</span>
           <input id="gitTokenInput" type="password" autocomplete="new-password">
         </label>
         <label class="field">
@@ -697,8 +923,8 @@
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title"><i data-lucide="search-check"></i><span>全文审校</span></div>
-        <div class="provider-grid" data-provider="review"></div>
+        <div class="settings-section-title"><i data-lucide="wand-sparkles"></i><span>格式迁移与编译诊断</span></div>
+        <div class="provider-grid" data-provider="format"></div>
       </div>
 
       <label class="toggle-row">
@@ -710,8 +936,8 @@
         <button type="button" class="button secondary" id="testTranslationButton">
           <i data-lucide="plug-zap"></i><span>测试翻译接口</span>
         </button>
-        <button type="button" class="button secondary" id="testReviewButton">
-          <i data-lucide="plug-zap"></i><span>测试审校接口</span>
+        <button type="button" class="button secondary" id="testFormatButton">
+          <i data-lucide="plug-zap"></i><span>测试格式接口</span>
         </button>
         <button type="submit" class="button primary" value="default">
           <i data-lucide="save"></i><span>保存设置</span>

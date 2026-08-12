@@ -100,12 +100,12 @@ test("creating a TeX source file lists and opens the new file even before it is 
   });
 });
 
-test("saving TeX source returns a refreshed bilingual document for the edited file", async () => {
+test("saving TeX source is lightweight by default but can explicitly refresh the bilingual document", async () => {
   await withProject("paperbridge-041-source-sync-", tablePaper, async ({ request }) => {
     const source = await request("/api/source?file=main.tex");
     const nextContent = source.content.replace(
       "This introduction paragraph has enough words to be detected by PaperBridge.",
-      "This revised introduction paragraph is returned immediately to the bilingual editor."
+      "This revised introduction paragraph is saved without rebuilding the bilingual editor."
     );
     const result = await request("/api/source", {
       file: "main.tex",
@@ -113,8 +113,22 @@ test("saving TeX source returns a refreshed bilingual document for the edited fi
       sourceHash: source.sourceHash,
       deferCompile: true
     });
-    assert.ok(result.document);
-    assert.match(result.document.segments[0].english, /revised introduction paragraph/);
+    assert.equal(result.document, null);
+    assert.equal(result.build, null);
+
+    const refreshedContent = nextContent.replace(
+      "saved without rebuilding the bilingual editor",
+      "returned when an explicit refresh is requested"
+    );
+    const refreshed = await request("/api/source", {
+      file: "main.tex",
+      content: refreshedContent,
+      sourceHash: result.source.sourceHash,
+      deferCompile: true,
+      refreshDocument: true
+    });
+    assert.ok(refreshed.document);
+    assert.match(refreshed.document.segments[0].english, /explicit refresh is requested/);
   });
 });
 

@@ -14,11 +14,13 @@ PaperBridge 不代替作者决定论文内容。它用于保持中文修改、�
 
 1. **翻译维护**：导入 ZIP 或本地项目时，自动排除导言区、作者信息、宏定义、公式、图表、算法代码和参考文献等非翻译内容；按段落维护中文工作稿和英文 LaTeX，只翻译指定段落或章节。
 2. **格式调整**：根据文字要求或 Word、PDF、TeX、ZIP 模板分析格式差异并迁移论文格式；写入前检查危险 LaTeX 命令、正文完整性、引用、标签和图片路径，关键操作失败时自动恢复。
-3. **版本维护**：支持 Overleaf Git，以及 GitHub、GitLab 等 HTTPS Git 仓库的拉取和推送；支持 OpenAI 兼容接口、DeepSeek、Anthropic 和 Gemini，并可分别配置翻译模型与审校模型。
+3. **版本维护**：支持 Overleaf Git，以及 GitHub、GitLab 等 HTTPS Git 仓库的拉取和推送；支持 OpenAI 兼容接口、DeepSeek、Anthropic 和 Gemini，并可分别配置翻译模型与格式诊断模型。
 
 ## 安装
 
-Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.0 Windows 安装程序](https://github.com/liyunjie-phd/PaperBridge/releases/download/v0.4.0/PaperBridge-Setup.exe)。
+Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.2 Windows 安装程序](https://github.com/liyunjie-phd/PaperBridge/releases/download/v0.4.2/PaperBridge-Setup.exe)。
+
+本次版本新增参考文献工作台：可以通过 DOI、doi.org 链接或论文网页自动生成 BibTeX，自动建议 `author_year_keyword` 形式的 citation key，识别重复文献，并在写入前预览和修改 BibTeX。工作台也支持搜索、查看字段解释以及直接插入正文引用。
 
 安装程序包含 PaperBridge、Git 和 Tectonic，不需要另行安装 Node.js。电脑已经安装 TeX Live 或 MiKTeX，并且可以使用 `latexmk` 时，PaperBridge 会优先使用本机 LaTeX；否则自动使用内置 Tectonic。
 
@@ -62,7 +64,7 @@ PaperBridge 会在本机加密保存 Token，并在拉取和推送时自动使�
 
 ### 3. 配置 AI 接口
 
-PaperBridge 支持 OpenAI 兼容接口、Anthropic Messages 和 Gemini GenerateContent。首次配置会将同一接口用于段落翻译和全文审校，之后可以在设置中分别调整。
+PaperBridge 支持 OpenAI 兼容接口、Anthropic Messages 和 Gemini GenerateContent。首次配置会将同一接口用于段落翻译、格式迁移和编译诊断，之后可以在设置中分别调整。
 
 以 DeepSeek 为例：
 
@@ -94,8 +96,7 @@ PaperBridge 目前支持 HTTPS 仓库，不支持 SSH 地址。公开仓库可�
 4. **随时检查排版**：以右侧 PDF 为准检查页数、换页、公式、引用、图片和表格位置。双击 PDF 文字可以返回对应段落；找不到翻译段落时会打开 TeX 源码。
 5. **处理简单源码问题**：进入 **TeX** 页面编辑当前项目引用的 `.tex` 和 `.bib` 文件，使用 `Ctrl+S` 保存并重新编译。每个源码文件最多保留最近 3 份备份。
 6. **处理编译错误**：打开右侧编译信息，查看 AI 给出的文件、行号、原因和建议；点击位置后人工确认并修改源码。相同错误会复用本地诊断缓存。
-7. **完成全文检查**：进入 **审校** 页面检查英文语法、术语一致性、段落衔接和全文连贯性，再逐项决定是否采用建议。
-8. **同步与交付**：确认 PDF 后导出文件；使用 Overleaf 或普通 Git 仓库时，再执行拉取、检查和推送。
+7. **同步与交付**：确认 PDF 后导出文件；使用 Overleaf 或普通 Git 仓库时，再执行拉取、检查和推送。
 
 ## 格式迁移工作流
 
@@ -138,7 +139,7 @@ flowchart LR
 
 ### 3. 分析格式差异
 
-结构确认后，PaperBridge 调用配置的审校 API，比较目标模板、文字要求和当前项目，生成：
+结构确认后，PaperBridge 调用配置的格式与诊断 API，比较目标模板、文字要求和当前项目，生成：
 
 - 目标格式名称和摘要；
 - 当前格式与目标格式的差异；
@@ -182,7 +183,7 @@ flowchart LR
 ## 数据位置与隐私
 
 - PaperBridge 在 Windows 本地运行并编译 LaTeX。
-- 只有翻译、审校、编译诊断或格式分析所需的文字会发送给用户配置的 AI API。
+- 只有翻译、编译诊断或格式分析所需的文字会发送给用户配置的 AI API。
 - 编译诊断只发送错误日志、报错行附近源码和必要的 LaTeX 配置，不发送无关的完整正文。
 - API Key、Overleaf Git Token 和 GitHub/GitLab Token 在桌面版本中通过 Windows 安全存储加密。
 - 中文工作稿和源码备份位于 PaperBridge 数据目录，不写入英文论文的 Git 仓库。
@@ -210,7 +211,7 @@ flowchart LR
 
 ### `AI provider returned 401: Authentication Fails`
 
-DeepSeek 将 401 定义为 API Key 认证失败。PaperBridge 的“段落翻译”和“全文审校”可以使用不同接口，因此应在设置中分别确认两处都显示 **已保存 API Key**，再点击对应的测试按钮。仍然失败时，请在 DeepSeek 开放平台重新创建 Key，并确认没有把 Base URL 误填到 API Key 输入框。
+DeepSeek 将 401 定义为 API Key 认证失败。PaperBridge 的“段落翻译”和“格式迁移与编译诊断”可以使用不同接口，因此应在设置中分别确认两处都显示 **已保存 API Key**，再点击对应的测试按钮。仍然失败时，请在 DeepSeek 开放平台重新创建 Key，并确认没有把 Base URL 误填到 API Key 输入框。
 
 ## 本地开发
 

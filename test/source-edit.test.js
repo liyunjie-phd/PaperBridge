@@ -69,6 +69,7 @@ test("TeX source API saves atomically, rejects stale edits, and retains three ba
     });
     assert.equal(result.response.ok, true, result.payload.error);
     assert.equal(result.payload.build, null);
+    assert.equal(result.payload.document, null);
     assert.equal(result.payload.project, undefined);
     assert.equal(await fs.readFile(path.join(projectRoot, "section.tex"), "utf8"), "First PaperBridge edit.\n");
 
@@ -134,8 +135,107 @@ test("TeX source save avoids blocking on a full project refresh", async () => {
   const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
   const serverJs = await fs.readFile(path.join(process.cwd(), "server.js"), "utf8");
 
-  assert.match(appJs, /scheduleProjectRefresh\(900\)/);
+  const saveStart = appJs.indexOf("async function saveSourceFile");
+  const saveEnd = appJs.indexOf("async function createTexFile", saveStart);
+  const saveBlock = appJs.slice(saveStart, saveEnd);
+  assert.match(saveBlock, /const deferCompile = options\.deferCompile \?\? true;/);
+  assert.doesNotMatch(saveBlock, /autoCompile/);
+  assert.match(saveBlock, /refreshDocument:\s*options\.refreshDocument === true/);
+  assert.doesNotMatch(saveBlock, /scheduleProjectRefresh/);
+  assert.match(serverJs, /const refreshDocument = req\.body\.refreshDocument === true;/);
+  assert.match(serverJs, /const deferCompile = req\.body\.deferCompile !== false;/);
   assert.doesNotMatch(serverJs, /document:\s*nextDocument[\s\S]{0,120}project:\s*await getProjectPayload\(\)/);
+});
+
+test("PDF export shows visible progress until save finishes", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const start = appJs.indexOf("async function exportPdf()");
+  const end = appJs.indexOf("function setMode", start);
+  const block = appJs.slice(start, end);
+
+  assert.match(appJs, /pdfExportToken:\s*0/);
+  assert.match(appJs, /exportPdfButton:\s*document\.querySelector\("#exportPdfButton"\)/);
+  assert.match(appJs, /elements\.exportPdfButton\.addEventListener\("click",\s*exportPdf\)/);
+  assert.match(block, /setBusy\(elements\.exportPdfButton,\s*true\)/);
+  assert.match(block, /正在保存 PDF/);
+  assert.match(block, /PDF 已保存/);
+  assert.match(block, /PDF 下载已开始/);
+  assert.match(block, /PDF 保存失败/);
+  assert.match(block, /setBusy\(elements\.exportPdfButton,\s*false\)/);
+  assert.match(block, /state\.pdfExportToken === exportToken/);
+});
+
+test("current TeX translation continues as a background file job after switching files", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const start = appJs.indexOf("async function translateCurrentFile()");
+  const end = appJs.indexOf("function formatFileName", start);
+  const block = appJs.slice(start, end);
+
+  assert.match(appJs, /fileTranslationJobs:\s*new Map\(\)/);
+  assert.match(block, /const translationFile = state\.currentFile;/);
+  assert.match(block, /state\.fileTranslationJobs\.has\(translationFile\)/);
+  assert.doesNotMatch(block, /setBusy\(button,\s*true\)/);
+  assert.doesNotMatch(block, /file:\s*state\.currentFile/);
+  assert.match(block, /file:\s*translationFile/);
+  assert.match(block, /if \(state\.currentFile === translationFile\)/);
+  assert.match(appJs, /state\.currentDocument = null;[\s\S]{0,140}renderFileTranslationProgress\(file\)/);
+  assert.match(appJs, /renderFileTranslationProgress\(state\.currentFile\)/);
+});
+
+test("paragraph translation clicks enqueue jobs instead of waiting for the current request", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const serverJs = await fs.readFile(path.join(process.cwd(), "server.js"), "utf8");
+  const createStart = appJs.indexOf("function createSegmentRow");
+  const createEnd = appJs.indexOf("function fitMathBlockEditor", createStart);
+  const createBlock = appJs.slice(createStart, createEnd);
+  const clickStart = createBlock.indexOf('translateButton.addEventListener("click"');
+  const clickEnd = createBlock.indexOf("});", clickStart);
+  const clickBlock = createBlock.slice(clickStart, clickEnd);
+  const queueStart = appJs.indexOf("function enqueueSegmentTranslation");
+  const queueEnd = appJs.indexOf("function createSegmentRow", queueStart);
+  const queueBlock = appJs.slice(queueStart, queueEnd);
+
+  assert.match(appJs, /const MAX_PARALLEL_SEGMENT_TRANSLATIONS = 6;/);
+  assert.match(serverJs, /PAPERBRIDGE_TRANSLATION_CONCURRENCY \|\| 6/);
+  assert.match(appJs, /segmentTranslationJobs:\s*new Map\(\)/);
+  assert.match(appJs, /segmentTranslationQueue:\s*\[\]/);
+  assert.match(appJs, /activeSegmentTranslations:\s*0/);
+  assert.match(appJs, /function enqueueSegmentTranslation/);
+  assert.match(appJs, /function runSegmentTranslationQueue/);
+  assert.match(appJs, /function applySegmentTranslationState/);
+  assert.match(createBlock, /applySegmentTranslationState\(row,\s*segment\)/);
+  assert.match(clickBlock, /enqueueSegmentTranslation\(\{\s*\.\.\.segment,\s*sourceHash:\s*latestSourceHash\(\)\s*\},\s*chinese\.value\)/);
+  assert.doesNotMatch(clickBlock, /await api\("\/api\/segment\/translate"/);
+  assert.match(queueBlock, /state\.activeSegmentTranslations < MAX_PARALLEL_SEGMENT_TRANSLATIONS/);
+  assert.match(queueBlock, /status:\s*"queued"/);
+  assert.match(queueBlock, /status = "running"/);
+  assert.match(queueBlock, /api\("\/api\/segment\/translate"/);
+});
+
+test("English paragraph edits autosave to TeX and confirm protected LaTeX token deletion", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const serverJs = await fs.readFile(path.join(process.cwd(), "server.js"), "utf8");
+  const createStart = appJs.indexOf("function createSegmentRow");
+  const createEnd = appJs.indexOf("function fitMathBlockEditor", createStart);
+  const createBlock = appJs.slice(createStart, createEnd);
+  const inputStart = createBlock.indexOf('english.addEventListener("input"');
+  const inputEnd = createBlock.indexOf("});", inputStart);
+  const inputBlock = createBlock.slice(inputStart, inputEnd);
+  const saveStart = createBlock.indexOf("async function saveEnglish");
+  const saveEnd = createBlock.indexOf("saveEnglishButton.addEventListener", saveStart);
+  const saveBlock = createBlock.slice(saveStart, saveEnd);
+
+  assert.match(appJs, /function segmentEnglishSaveTimerKey/);
+  assert.match(inputBlock, /markEnglishChanged\("英文待自动保存"\)/);
+  assert.match(inputBlock, /scheduleEnglishAutosave\(\)/);
+  assert.match(saveBlock, /options\.automatic === true/);
+  assert.match(saveBlock, /sourceHash:\s*latestSourceHash\(\)/);
+  assert.match(saveBlock, /english:\s*requestedEnglish/);
+  assert.doesNotMatch(saveBlock, /renderSegments\(\)/);
+  assert.match(saveBlock, /window\.confirm\(`修改删除了 LaTeX 标记/);
+  assert.match(saveBlock, /forceRetry = true/);
+  assert.match(saveBlock, /return saveEnglish\(true,\s*\{\s*automatic\s*\}\)/);
+  assert.match(serverJs, /findMissingProtectedTokens\(segment\.english, segment\.chinese, nextEnglish\)[\s\S]{0,100}\.filter\(\(token\) => !isOptionalTranslationToken\(token\)\)/);
 });
 
 test("sidebar owns project switching and new TeX while source view follows the selected document", async () => {
@@ -151,4 +251,45 @@ test("sidebar owns project switching and new TeX while source view follows the s
   assert.match(appJs, /renderSourceFileOptions\(loadCurrent \? state\.currentFile : state\.sourceFile\)/);
   assert.doesNotMatch(appJs, /insert-figure-button/);
   assert.match(styles, /\.project-switch-button/);
+});
+
+test("PDF double-click navigation constrains matches by page text and source order", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const matcherStart = appJs.indexOf("function scoreNavigationText(");
+  const matcherBlock = appJs.slice(matcherStart, appJs.indexOf("async function getPdfParagraphIndex", matcherStart));
+  const queryStart = appJs.indexOf("function extractPdfNavigationQuery(");
+  const queryBlock = appJs.slice(queryStart, appJs.indexOf("function highlightLocatedSegment", queryStart));
+  const locateStart = appJs.indexOf("async function locatePdfSelection(");
+  const locateBlock = appJs.slice(locateStart, appJs.indexOf("async function locateFastPreviewSelection", locateStart));
+  const captionMatch = locateBlock.indexOf("getPdfCaptionIndex()");
+  const paragraphMatch = locateBlock.indexOf("getPdfParagraphIndex()");
+
+  assert.match(matcherBlock, /scoreNavigationPageEvidence/);
+  assert.match(matcherBlock, /scoreNavigationPosition/);
+  assert.match(matcherBlock, /captionReliable/);
+  assert.match(matcherBlock, /positionPenalty/);
+  assert.match(queryBlock, /pageText:\s*items\.filter\(Boolean\)\.join\(" "\)/);
+  assert.match(queryBlock, /state\.pdfDocument\?\.numPages\s*\|\|\s*state\.project\?\.pdf\?\.pages/);
+  assert.match(appJs, /positionRatio:\s*entries\.length <= 1 \? 0 : index \/ denominator/);
+  assert.match(appJs, /function extractLatexCaptions/);
+  assert.match(appJs, /function getPdfCaptionIndex/);
+  assert.ok(captionMatch >= 0 && paragraphMatch >= 0 && captionMatch < paragraphMatch);
+  assert.match(locateBlock, /const navigationScope = \{[\s\S]*page:\s*query\.page[\s\S]*pageText:\s*query\.pageText/);
+  assert.match(locateBlock, /findBestNavigationMatch\(query\.context,\s*query\.selectedText,\s*await getPdfCaptionIndex\(\),\s*\{[\s\S]*caption:\s*true/);
+  assert.match(locateBlock, /findBestNavigationMatch\(query\.context,\s*query\.selectedText,\s*await getPdfParagraphIndex\(\),\s*navigationScope\)/);
+});
+
+test("TeX source navigation and search visibly pulse the located selection", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
+  const openStart = appJs.indexOf("async function openSourceLocation");
+  const openBlock = appJs.slice(openStart, appJs.indexOf("function renderCompileDiagnosis", openStart));
+  const searchStart = appJs.indexOf("function selectSourceSearchMatch");
+  const searchBlock = appJs.slice(searchStart, appJs.indexOf("function moveSourceSearch", searchStart));
+
+  assert.match(appJs, /function flashSourceSelection/);
+  assert.match(openBlock, /setSelectionRange\(start,\s*end\)[\s\S]*flashSourceSelection\(\)/);
+  assert.match(searchBlock, /setSelectionRange\(match\.start,\s*match\.end\)[\s\S]*flashSourceSelection\(\)/);
+  assert.match(styles, /\.source-editor\.source-located/);
+  assert.match(styles, /@keyframes sourceLocatedPulse/);
 });

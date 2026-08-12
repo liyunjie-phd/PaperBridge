@@ -436,6 +436,189 @@ test("file terminology is extracted locally before Chinese translation and reuse
   }
 });
 
+test("terminology extraction keeps frequent abbreviations and applies first-use definitions", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-abbreviation-terminology-"));
+  const projectRoot = path.join(root, "project");
+  try {
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(
+      path.join(projectRoot, "main.tex"),
+      [
+        "\\documentclass{article}",
+        "\\begin{document}",
+        "\\section{Introduction}",
+        "ADR improves link adaptation for satellite terminals.",
+        "The DtS-IoT scheduler uses ADR during intermittent connectivity.",
+        "DtS-IoT improves handover reliability, while Low Earth Orbit (LEO) links use ADR repeatedly.",
+        "\\end{document}"
+      ].join("\n"),
+      "utf8"
+    );
+    const server = await startServer({
+      port: 0,
+      dataRoot: path.join(root, "data"),
+      projectsRoot: path.join(root, "projects")
+    });
+    const request = async (url, body, method = body ? "POST" : "GET") => {
+      const response = await fetch(`${server.url}${url}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const payload = await response.json();
+      assert.equal(response.ok, true, payload.error);
+      return payload;
+    };
+    const provider = {
+      type: "openai-compatible",
+      baseUrl: "http://127.0.0.1:1",
+      apiKey: "test-key",
+      model: "test-model",
+      jsonMode: true
+    };
+    await request("/api/setup", {
+      source: { mode: "local", localPath: projectRoot },
+      translation: provider,
+      review: provider,
+      autoCompile: false
+    });
+
+    const terminology = await request("/api/file/terminology", { file: "main.tex", force: true });
+    const byEnglish = new Map(terminology.entries.map((entry) => [entry.english, entry]));
+    assert.equal(byEnglish.get("ADR")?.frequency, 3);
+    assert.equal(byEnglish.get("ADR")?.needsFullName, true);
+    assert.equal(byEnglish.get("ADR")?.fullName, "");
+    assert.equal(byEnglish.get("DtS-IoT")?.frequency, 2);
+    assert.equal(byEnglish.get("DtS-IoT")?.needsFullName, true);
+    assert.equal(byEnglish.get("LEO")?.fullName, "Low Earth Orbit");
+    assert.equal(byEnglish.get("LEO")?.needsFullName, false);
+
+    const entries = terminology.entries.map((entry) => (
+      entry.english === "ADR"
+        ? { ...entry, fullName: "Adaptive Data Rate", needsFullName: false }
+        : entry.english === "DtS-IoT"
+          ? { ...entry, fullName: "Direct-to-Satellite Internet of Things", needsFullName: false }
+          : entry
+    ));
+    const applied = await request("/api/file/terminology/apply", { file: "main.tex", entries });
+    assert.deepEqual(applied.applied.map((entry) => entry.english), ["ADR", "DtS-IoT"]);
+    assert.ok(applied.skipped.some((entry) => entry.english === "LEO" && entry.reason === "already-defined"));
+    const source = await request("/api/source?file=main.tex");
+    assert.match(source.content, /Adaptive Data Rate \(ADR\) improves link adaptation/);
+    assert.match(source.content, /The Direct-to-Satellite Internet of Things \(DtS-IoT\) scheduler uses ADR/);
+    assert.match(source.content, /Low Earth Orbit \(LEO\) links use ADR repeatedly/);
+    assert.equal((source.content.match(/Adaptive Data Rate \(ADR\)/g) || []).length, 1);
+  } finally {
+    await stopServer();
+    const relative = path.relative(os.tmpdir(), root);
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("terminology extraction scans the full project and writes first-use definitions across files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-project-terminology-"));
+  const projectRoot = path.join(root, "project");
+  try {
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(
+      path.join(projectRoot, "main.tex"),
+      [
+        "\\documentclass{article}",
+        "\\begin{document}",
+        "\\input{intro}",
+        "\\input{method}",
+        "\\end{document}"
+      ].join("\n"),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(projectRoot, "intro.tex"),
+      [
+        "\\section{Introduction}",
+        "Low Earth Orbit (LEO) satellite links use ADR during initial access.",
+        "The introduction mentions ADR before the method file."
+      ].join("\n"),
+      "utf8"
+    );
+    await fs.writeFile(
+      path.join(projectRoot, "method.tex"),
+      [
+        "\\section{Method}",
+        "The ADR controller is evaluated with a Direct-to-Satellite Internet of Things (DtS-IoT) scheduler.",
+        "DtS-IoT keeps the same beacon timing while ADR changes PHY parameters."
+      ].join("\n"),
+      "utf8"
+    );
+    const server = await startServer({
+      port: 0,
+      dataRoot: path.join(root, "data"),
+      projectsRoot: path.join(root, "projects")
+    });
+    const request = async (url, body, method = body ? "POST" : "GET") => {
+      const response = await fetch(`${server.url}${url}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined
+      });
+      const payload = await response.json();
+      assert.equal(response.ok, true, payload.error);
+      return payload;
+    };
+    const provider = {
+      type: "openai-compatible",
+      baseUrl: "http://127.0.0.1:1",
+      apiKey: "test-key",
+      model: "test-model",
+      jsonMode: true
+    };
+    await request("/api/setup", {
+      source: { mode: "local", localPath: projectRoot },
+      translation: provider,
+      review: provider,
+      autoCompile: false
+    });
+
+    const terminology = await request("/api/file/terminology", { file: "method.tex", force: true });
+    assert.equal(terminology.scope, "project");
+    assert.deepEqual(terminology.files, ["main.tex", "intro.tex", "method.tex"]);
+    const byEnglish = new Map(terminology.entries.map((entry) => [entry.english, entry]));
+    assert.equal(byEnglish.get("ADR")?.frequency, 4);
+    assert.equal(byEnglish.get("ADR")?.needsFullName, true);
+    assert.equal(byEnglish.get("LEO")?.fullName, "Low Earth Orbit");
+    assert.equal(byEnglish.get("LEO")?.note, "Low Earth Orbit");
+    assert.equal(byEnglish.get("DtS-IoT")?.fullName, "Direct-to-Satellite Internet of Things");
+    assert.equal(byEnglish.get("DtS-IoT")?.note, "Direct-to-Satellite Internet of Things");
+    assert.ok(terminology.entries.every((entry) => !String(entry.note || "").includes("abbreviation for")));
+
+    const saved = await request("/api/file/terminology", {
+      file: "intro.tex",
+      entries: terminology.entries.map((entry) => (
+        entry.english === "ADR"
+          ? { ...entry, fullName: "Adaptive Data Rate", note: "Adaptive Data Rate", needsFullName: false }
+          : entry
+      ))
+    }, "PUT");
+    assert.equal(saved.scope, "project");
+
+    const reused = await request("/api/file/terminology?file=method.tex");
+    assert.equal(reused.scope, "project");
+    assert.equal(new Map(reused.entries.map((entry) => [entry.english, entry])).get("ADR")?.fullName, "Adaptive Data Rate");
+
+    const applied = await request("/api/file/terminology/apply", { file: "method.tex", entries: reused.entries });
+    assert.ok(applied.applied.some((entry) => entry.english === "ADR" && entry.file === "intro.tex"));
+    const introSource = await request("/api/source?file=intro.tex");
+    const methodSource = await request("/api/source?file=method.tex");
+    assert.match(introSource.content, /Adaptive Data Rate \(ADR\) during initial access/);
+    assert.doesNotMatch(methodSource.content, /Adaptive Data Rate \(ADR\)/);
+  } finally {
+    await stopServer();
+    const relative = path.relative(os.tmpdir(), root);
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("manually saved terminology is editable and not overwritten by non-forced generation", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-manual-terminology-"));
   const projectRoot = path.join(root, "project");

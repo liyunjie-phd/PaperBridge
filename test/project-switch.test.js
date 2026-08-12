@@ -60,8 +60,9 @@ test("switching projects preserves saved AI and Overleaf credentials", async () 
     assert.equal(project.config.autoCompile, true);
     assert.equal(project.config.translation.model, "deepseek-v4-flash");
     assert.equal(project.config.translation.hasApiKey, true);
-    assert.equal(project.config.review.model, "deepseek-v4-pro");
-    assert.equal(project.config.review.hasApiKey, true);
+    assert.equal(project.config.format.model, "deepseek-v4-pro");
+    assert.equal(project.config.format.hasApiKey, true);
+    assert.equal("review" in project.config, false);
 
     response = await request("/api/project/open", {
       projectRoot: firstProject,

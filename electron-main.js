@@ -35,6 +35,10 @@ const storedStorageRoot = process.env.PAPERBRIDGE_STORAGE_ROOT || readStoredStor
 if (storedStorageRoot) app.setPath("userData", path.join(storedStorageRoot, "AppData"));
 let mainWindow = null;
 let appUrl = "";
+let closeRequestSequence = 0;
+let forceWindowClose = false;
+let handlingWindowClose = false;
+const pendingCloseRequests = new Map();
 
 function encryptSecret(value) {
   if (!safeStorage.isEncryptionAvailable()) return null;
@@ -47,6 +51,74 @@ function decryptSecret(value) {
     return safeStorage.decryptString(Buffer.from(value, "base64"));
   } catch {
     return "";
+  }
+}
+
+function requestRendererClose(save, timeoutMs = 75_000) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return Promise.resolve({ ok: true, dirty: false, undoCount: 0 });
+  }
+  const requestId = String(++closeRequestSequence);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingCloseRequests.delete(requestId);
+      resolve({ ok: false, message: "等待论文保存超时，请稍后重试。" });
+    }, timeoutMs);
+    pendingCloseRequests.set(requestId, (result) => {
+      clearTimeout(timer);
+      resolve(result || { ok: false, message: "未收到论文保存结果。" });
+    });
+    mainWindow.webContents.send("paperbridge:close-request", requestId, save);
+  });
+}
+
+async function handleWindowClose() {
+  if (handlingWindowClose || !mainWindow) return;
+  handlingWindowClose = true;
+  try {
+    const status = await requestRendererClose(false, 8_000);
+    if (!status.ok) {
+      await dialog.showMessageBox(mainWindow, {
+        type: "error",
+        title: "暂时无法退出",
+        message: status.message || "无法读取论文保存状态。",
+        buttons: ["继续编辑"]
+      });
+      return;
+    }
+    if (!status.dirty) {
+      forceWindowClose = true;
+      mainWindow.close();
+      return;
+    }
+    const operationText = status.undoCount
+      ? `本次有 ${status.undoCount} 步论文修改。保存后将清空本次撤销记录。`
+      : "仍有修改或后台任务尚未确认保存。";
+    const choice = await dialog.showMessageBox(mainWindow, {
+      type: "question",
+      title: "退出 PaperBridge",
+      message: "是否保存刚才所做的全部更改？",
+      detail: operationText,
+      buttons: ["保存并退出", "继续编辑"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    });
+    if (choice.response !== 0) return;
+    const saved = await requestRendererClose(true);
+    if (!saved.ok) {
+      await dialog.showMessageBox(mainWindow, {
+        type: "error",
+        title: "保存未完成",
+        message: saved.message || "部分修改尚未保存，窗口没有关闭。",
+        buttons: ["继续编辑"]
+      });
+      return;
+    }
+    forceWindowClose = true;
+    mainWindow.close();
+  } finally {
+    handlingWindowClose = false;
   }
 }
 
@@ -78,13 +150,31 @@ async function createWindow() {
     shell.openExternal(url);
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.on("close", (event) => {
+    if (forceWindowClose) return;
+    event.preventDefault();
+    void handleWindowClose();
+  });
   mainWindow.on("closed", () => {
+    for (const resolve of pendingCloseRequests.values()) {
+      resolve({ ok: false, message: "窗口已关闭。" });
+    }
+    pendingCloseRequests.clear();
     mainWindow = null;
+    forceWindowClose = false;
+    handlingWindowClose = false;
   });
   await mainWindow.loadURL(appUrl);
 }
 
 function registerDesktopHandlers() {
+  ipcMain.on("paperbridge:close-response", (event, requestId, result) => {
+    if (event.sender !== mainWindow?.webContents) return;
+    const resolve = pendingCloseRequests.get(String(requestId));
+    if (!resolve) return;
+    pendingCloseRequests.delete(String(requestId));
+    resolve(result);
+  });
   ipcMain.handle("paperbridge:choose-folder", async () => {
     const result = await dialog.showOpenDialog(mainWindow, { properties: ["openDirectory"] });
     return result.canceled ? "" : result.filePaths[0];
