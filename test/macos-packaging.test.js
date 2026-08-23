@@ -14,9 +14,9 @@ const workflow = fs.readFileSync(path.join(projectRoot, ".github", "workflows", 
 
 test("macOS packaging targets both supported architectures", () => {
   assert.equal(packageJson.build.directories.output, "release/windows");
-  assert.match(packageJson.scripts["build:mac"], /electron-builder --config build\/electron-builder\.mac\.cjs --mac dmg zip --universal/);
-  assert.match(packageJson.scripts["build:mac:x64"], /electron-builder --config build\/electron-builder\.mac\.cjs --mac dmg zip --x64/);
-  assert.match(packageJson.scripts["build:mac:arm64"], /electron-builder --config build\/electron-builder\.mac\.cjs --mac dmg zip --arm64/);
+  assert.match(packageJson.scripts["build:mac"], /electron-builder --config build\/electron-builder\.mac\.cjs --mac dmg zip --universal --publish never/);
+  assert.match(packageJson.scripts["build:mac:x64"], /electron-builder --config build\/electron-builder\.mac\.cjs --mac dmg zip --x64 --publish never/);
+  assert.match(packageJson.scripts["build:mac:arm64"], /electron-builder --config build\/electron-builder\.mac\.cjs --mac dmg zip --arm64 --publish never/);
   const mac = packageJson.build.mac;
   assert.equal(mac.category, "public.app-category.productivity");
   assert.deepEqual(mac.target.flatMap((target) => target.arch), ["x64", "arm64", "x64", "arm64"]);
