@@ -14,9 +14,9 @@
     "build:dir": "electron-builder --dir --win --x64",
     "build:setup": "electron-builder --win nsis --x64",
     "build:setup:slim": "electron-builder --config build/electron-builder.slim.cjs --win nsis --x64",
-    "build:mac": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --universal",
-    "build:mac:x64": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --x64",
-    "build:mac:arm64": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --arm64"
+    "build:mac": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --universal --publish never",
+    "build:mac:x64": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --x64 --publish never",
+    "build:mac:arm64": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --arm64 --publish never"
   },
   "dependencies": {
     "dugite": "^3.2.2",
