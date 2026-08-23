@@ -38,8 +38,9 @@ test("macOS icon is large enough for electron-builder", () => {
 });
 
 test("macOS workflow bundles an architecture-matched Tectonic binary", () => {
-  assert.match(workflow, /macos-13/);
+  assert.match(workflow, /macos-15-intel/);
   assert.match(workflow, /macos-14/);
+  assert.match(workflow, /timeout-minutes:\s*30/);
   assert.match(workflow, /actions\/checkout@v5/);
   assert.match(workflow, /actions\/setup-node@v5/);
   assert.match(workflow, /brew untap aws\/tap/);

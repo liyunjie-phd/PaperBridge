@@ -13,11 +13,14 @@ jobs:
   build:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13
+          # macos-13 is an older Intel label and can remain queued for a long
+          # time. Use the currently supported standard Intel runner instead.
+          - runner: macos-15-intel
             arch: x64
           - runner: macos-14
             arch: arm64
