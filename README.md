@@ -8,7 +8,6 @@ PaperBridge 不代替作者决定论文内容。它用于保持中文修改、�
 
 ![PaperBridge 中英文对照编辑与 PDF 排版预览](docs/images/paperbridge-overview.png)
 
-> 示意图使用单独授权的模板项目。
 
 ## 主要功能
 
@@ -18,7 +17,7 @@ PaperBridge 不代替作者决定论文内容。它用于保持中文修改、�
 
 ## 安装
 
-Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.2 Windows 安装程序](https://github.com/liyunjie-phd/PaperBridge/releases/latest/download/PaperBridge-Setup.exe)。
+Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.3 Windows 安装程序](https://github.com/liyunjie-phd/PaperBridge/releases/tag/v0.4.3)。
 
 本次版本新增参考文献工作台：可以通过 DOI、doi.org 链接或论文网页自动生成 BibTeX，自动建议 `author_year_keyword` 形式的 citation key，识别重复文献，并在写入前预览和修改 BibTeX。工作台也支持搜索、查看字段解释以及直接插入正文引用。
 
