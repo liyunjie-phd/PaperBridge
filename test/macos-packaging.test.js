@@ -29,7 +29,11 @@ test("macOS packaging targets both supported architectures", () => {
 test("macOS workflow bundles an architecture-matched Tectonic binary", () => {
   assert.match(workflow, /macos-13/);
   assert.match(workflow, /macos-14/);
-  assert.match(workflow, /brew install tectonic/);
+  assert.match(workflow, /actions\/checkout@v5/);
+  assert.match(workflow, /actions\/setup-node@v5/);
+  assert.match(workflow, /brew untap aws\/tap/);
+  assert.match(workflow, /brew install(?: --formula)? tectonic/);
+  assert.match(workflow, /tectonic --version/);
   assert.match(workflow, /darwin-\$\{\{ matrix\.arch \}\}/);
   assert.match(workflow, /npm run build:mac:\$\{\{ matrix\.arch \}\}/);
 });

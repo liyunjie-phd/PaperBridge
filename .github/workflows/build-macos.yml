@@ -24,10 +24,10 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -37,8 +37,14 @@ jobs:
 
       - name: Add bundled Tectonic
         shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
-          brew install tectonic
+          # GitHub's macOS images may contain an unrelated untrusted tap.
+          # PaperBridge only needs the official Tectonic formula.
+          brew untap aws/tap >/dev/null 2>&1 || true
+          brew install --formula tectonic
+          tectonic --version
           mkdir -p "resources/bin/darwin-${{ matrix.arch }}"
           cp "$(brew --prefix tectonic)/bin/tectonic" "resources/bin/darwin-${{ matrix.arch }}/tectonic"
           chmod +x "resources/bin/darwin-${{ matrix.arch }}/tectonic"
