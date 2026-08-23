@@ -26,6 +26,17 @@ test("macOS packaging targets both supported architectures", () => {
   assert.deepEqual(macConfig.extraResources[0].filter, ["darwin-x64/tectonic", "darwin-arm64/tectonic"]);
 });
 
+test("macOS icon is large enough for electron-builder", () => {
+  const iconPath = path.join(projectRoot, "resources", "icon.png");
+  const png = fs.readFileSync(iconPath);
+  assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  // PNG stores the IHDR width and height as unsigned big-endian values.
+  assert.ok(png.readUInt32BE(16) >= 512, "icon width must be at least 512px");
+  assert.ok(png.readUInt32BE(20) >= 512, "icon height must be at least 512px");
+  const svg = fs.readFileSync(path.join(projectRoot, "resources", "icon.svg"), "utf8");
+  assert.match(svg, /width="1024"\s+height="1024"/);
+});
+
 test("macOS workflow bundles an architecture-matched Tectonic binary", () => {
   assert.match(workflow, /macos-13/);
   assert.match(workflow, /macos-14/);
