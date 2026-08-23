@@ -46,11 +46,11 @@
 
   <main class="workspace">
     <aside class="sidebar">
-      <div class="mode-switch" role="tablist">
-        <button class="mode-button active" data-mode="edit" role="tab">编辑</button>
-        <button class="mode-button" data-mode="source" role="tab">TeX</button>
-        <button class="mode-button" data-mode="references" role="tab">文献</button>
-        <button class="mode-button" data-mode="format" role="tab">格式</button>
+      <div class="mode-switch" role="group" aria-label="工作区">
+        <button class="mode-button active" data-mode="source" type="button" aria-pressed="true">TeX</button>
+        <button class="mode-button" data-mode="edit" type="button" aria-pressed="false">翻译</button>
+        <button class="mode-button" data-mode="references" type="button" aria-pressed="false">文献</button>
+        <button class="mode-button" data-mode="format" type="button" aria-pressed="false">格式</button>
       </div>
 
       <div class="sidebar-section project-sidebar-section">
@@ -86,7 +86,7 @@
       </div>
     </aside>
 
-    <section class="editor-panel" id="editView">
+    <section class="editor-panel hidden" id="editView">
       <div class="panel-toolbar">
         <div>
           <h1 id="currentFile">Select a document</h1>
@@ -99,6 +99,9 @@
             <button class="icon-button small" id="increaseFontButton" title="增大字号"><i data-lucide="plus"></i></button>
           </div>
           <select class="translation-section-select" id="translationSectionSelect" aria-label="当前 TeX 文件章节列表" title="当前 TeX 文件章节列表"></select>
+          <button class="button primary" id="translateSectionButton" title="将所选章节已有的中文工作稿逐段更新到英文 LaTeX">
+            <i data-lucide="arrow-right"></i><span>翻译本节</span>
+          </button>
           <button class="button secondary" id="translateFileButton" title="为当前 TeX 文件的所有正文段落生成或更新中文版本">
             <i data-lucide="languages"></i><span>翻译当前 TeX</span>
           </button>
@@ -128,7 +131,7 @@
       </div>
     </section>
 
-    <section class="editor-panel source-panel hidden" id="sourceView">
+    <section class="editor-panel source-panel" id="sourceView">
       <div class="panel-toolbar source-toolbar">
         <div>
           <h1>TeX / Bib 源码</h1>
@@ -323,7 +326,7 @@
         <label class="field wide">
           <span>PaperBridge 数据目录</span>
           <div class="path-input-row">
-            <input id="setupStorageRoot" type="text" autocomplete="off" readonly required>
+            <input id="setupStorageRoot" type="text" autocomplete="off" readonly>
             <button class="icon-button" id="chooseSetupStorageButton" type="button" title="选择数据目录"><i data-lucide="folder-open"></i></button>
           </div>
         </label>
@@ -344,10 +347,15 @@
           <small class="field-note">只修改 PaperBridge 中的显示名称，不会改动文件夹名或远端仓库。</small>
         </label>
         <div class="source-switch" role="radiogroup" aria-label="论文来源">
-          <label><input type="radio" name="setupSource" value="overleaf" checked><span><i data-lucide="cloud"></i>Overleaf</span></label>
+          <label><input type="radio" name="setupSource" value="new" checked><span><i data-lucide="file-plus-2"></i>新建项目</span></label>
+          <label><input type="radio" name="setupSource" value="overleaf"><span><i data-lucide="cloud"></i>Overleaf</span></label>
           <label><input type="radio" name="setupSource" value="git"><span><i data-lucide="git-branch"></i>Git 仓库</span></label>
           <label><input type="radio" name="setupSource" value="zip"><span><i data-lucide="file-archive"></i>ZIP 文件</span></label>
           <label><input type="radio" name="setupSource" value="local"><span><i data-lucide="folder-open"></i>本地文件夹</span></label>
+        </div>
+
+        <div class="source-panel" data-source-panel="new">
+          <div class="setup-note">将在 PaperBridge 数据目录中创建一个包含 main.tex 的空白项目。项目名称可以留空，之后仍可修改。</div>
         </div>
 
         <div class="source-panel hidden" data-source-panel="git">
@@ -368,7 +376,7 @@
           <div class="setup-note">仅支持 HTTPS 地址。Token 只保存在此电脑，不会写入论文目录或 Git 远端地址。</div>
         </div>
 
-        <div class="source-panel" data-source-panel="overleaf">
+        <div class="source-panel hidden" data-source-panel="overleaf">
           <label class="field wide">
             <span>Overleaf 项目链接</span>
             <input id="setupProjectUrl" type="url" autocomplete="off" placeholder="https://www.overleaf.com/project/...">
@@ -430,7 +438,8 @@
       </section>
 
       <section class="setup-section" id="setupAiSection">
-        <div class="setup-section-heading"><span class="setup-step">3</span><strong>配置 AI</strong></div>
+        <div class="setup-section-heading"><span class="setup-step">3</span><strong>配置 AI（可选）</strong></div>
+        <div class="setup-note setup-optional-note">可以全部留空并直接进入项目。需要翻译、格式迁移或错误诊断时，再到设置中配置 API。</div>
         <div class="setup-provider-grid">
           <label class="field">
             <span>API 服务类型</span>
@@ -473,7 +482,7 @@
 
       <div class="setup-message" id="setupMessage" aria-live="polite"></div>
       <div class="setup-actions">
-        <button class="button secondary" id="setupTestButton" type="button"><i data-lucide="plug-zap"></i><span>测试 AI</span></button>
+        <button class="button secondary" id="setupTestButton" type="button"><i data-lucide="plug-zap"></i><span>测试 AI（可选）</span></button>
         <button class="button primary" id="setupSubmitButton" type="submit"><i data-lucide="arrow-right"></i><span id="setupSubmitLabel">进入 PaperBridge</span></button>
       </div>
     </form>
@@ -539,23 +548,23 @@
   </dialog>
 
   <dialog class="reference-add-dialog" id="referenceAddDialog">
-    <form class="reference-add-form" id="referenceAddForm">
+    <form class="reference-add-form" id="referenceAddForm" novalidate>
       <div class="dialog-header">
         <div>
           <h2>新增参考文献</h2>
-          <div class="file-meta">输入 DOI 或论文链接，自动生成并确认 BibTeX</div>
+          <div class="file-meta">输入 DOI、arXiv、IEEE 或网页链接，自动生成并确认 BibTeX</div>
         </div>
         <button class="icon-button" id="closeReferenceAddButton" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
       </div>
       <div class="reference-add-body">
         <label class="field">
-          <span>论文链接或 DOI</span>
+          <span>DOI 或网页链接</span>
           <div class="reference-add-url-row">
-            <input id="referenceAddUrl" type="url" placeholder="https://doi.org/10.xxxx/..." autocomplete="off">
+            <input id="referenceAddUrl" type="text" inputmode="url" placeholder="DOI、arXiv、IEEE 或普通网页链接" autocomplete="off">
             <button class="button secondary" id="referenceLookupButton" type="button"><i data-lucide="search"></i><span>获取信息</span></button>
           </div>
         </label>
-        <div class="reference-add-status" id="referenceAddStatus">粘贴 DOI、doi.org 链接或论文网页链接，然后获取元数据。</div>
+        <div class="reference-add-status" id="referenceAddStatus">粘贴 DOI、arXiv、IEEE 或普通网页链接，然后获取元数据。</div>
         <div class="reference-add-grid">
           <label class="field">
             <span>写入 Bib 文件</span>
@@ -853,6 +862,36 @@
       </div>
       <div class="dialog-actions">
         <button type="submit" class="button primary"><i data-lucide="check"></i><span>确认主文件</span></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="create-tex-dialog" id="createTexDialog">
+    <form class="create-tex-form" id="createTexForm">
+      <div class="dialog-header">
+        <div>
+          <h2>新建 TeX 文件</h2>
+          <div class="file-meta">创建文件，并选择是否在主 TeX 中引用</div>
+        </div>
+        <button class="icon-button" id="closeCreateTexButton" type="button" title="关闭"><i data-lucide="x"></i></button>
+      </div>
+      <div class="create-tex-body">
+        <label class="field">
+          <span>文件名</span>
+          <input id="newTexFileName" type="text" value="sections/new-section.tex" placeholder="例如 sections/method.tex" autocomplete="off" required>
+          <small class="field-note">文件会创建在当前论文项目内；省略 .tex 时会自动补全。</small>
+        </label>
+        <label class="field">
+          <span>插入到主 TeX 的位置</span>
+          <select id="newTexInsertion"></select>
+          <small class="field-note" id="newTexInsertionNote">选择章节时，会在该章节内容末尾写入 \input{文件名}。</small>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelCreateTexButton" type="button">取消</button>
+        <button class="button primary" id="submitCreateTexButton" type="submit">
+          <i data-lucide="file-plus-2"></i><span>创建文件</span>
+        </button>
       </div>
     </form>
   </dialog>

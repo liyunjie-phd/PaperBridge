@@ -48,7 +48,8 @@ const state = {
   currentFile: null,
   currentDocument: null,
   warnings: [],
-  mode: "edit",
+  mode: "source",
+  referencesOpen: false,
   saveTimers: new Map(),
   pendingWrites: 0,
   undoCount: 0,
@@ -110,6 +111,9 @@ const state = {
   sourceEol: "\n",
   sourceSavedContent: "",
   sourceDirty: false,
+  sourceAutosaveTimer: 0,
+  sourceSaveInFlight: false,
+  sourceSavePending: false,
   sourceSearchQuery: "",
   sourceSearchMatches: [],
   sourceSearchIndex: -1,
@@ -153,6 +157,7 @@ const elements = {
   fileMeta: document.querySelector("#fileMeta"),
   editorFontSize: document.querySelector("#editorFontSize"),
   translationSectionSelect: document.querySelector("#translationSectionSelect"),
+  translateSectionButton: document.querySelector("#translateSectionButton"),
   bilingualHeadings: document.querySelector("#bilingualHeadings"),
   splitHandle: document.querySelector("#splitHandle"),
   workspaceSplitHandle: document.querySelector("#workspaceSplitHandle"),
@@ -182,6 +187,12 @@ const elements = {
   sourceStatus: document.querySelector("#sourceStatus"),
   saveSourceButton: document.querySelector("#saveSourceButton"),
   createTexFileButton: document.querySelector("#createTexFileButton"),
+  createTexDialog: document.querySelector("#createTexDialog"),
+  createTexForm: document.querySelector("#createTexForm"),
+  newTexFileName: document.querySelector("#newTexFileName"),
+  newTexInsertion: document.querySelector("#newTexInsertion"),
+  newTexInsertionNote: document.querySelector("#newTexInsertionNote"),
+  submitCreateTexButton: document.querySelector("#submitCreateTexButton"),
   insertFigureSourceButton: document.querySelector("#insertFigureSourceButton"),
   modularizeButton: document.querySelector("#modularizeButton"),
   sourceSearchInput: null,
@@ -386,7 +397,7 @@ function setupProviderProfile() {
 function updateSetupCustomModel() {
   const custom = document.querySelector("#setupModel").value === "__custom__";
   document.querySelector("#setupCustomModelField").classList.toggle("hidden", !custom);
-  document.querySelector("#setupCustomModel").required = custom;
+  document.querySelector("#setupCustomModel").required = false;
 }
 
 function updateSetupModelOptions(type) {
@@ -949,8 +960,8 @@ function openSetup(project, { switching = false } = {}) {
   state.setupMode = switching ? "switch" : "initial";
   document.querySelector("#setupTitle").textContent = switching ? "添加或切换论文" : "开始使用 PaperBridge";
   document.querySelector("#setupSubtitle").textContent = switching
-    ? "打开另一个 Overleaf、Git、ZIP 或本地 LaTeX 项目"
-    : "连接论文并配置你的 AI 接口";
+    ? "新建项目，或打开另一个 Overleaf、Git、ZIP、本地 LaTeX 项目"
+    : "新建或选择论文项目；AI 和远端连接可以稍后配置";
   document.querySelector("#setupSubmitLabel").textContent = switching ? "打开论文" : "进入 PaperBridge";
   document.querySelector("#closeSetupButton").classList.toggle("hidden", !switching);
   document.querySelector("#setupStorageSection").classList.toggle("hidden", switching);
@@ -1087,13 +1098,15 @@ async function submitSetup(event) {
       : document.querySelector("#setupLinkedGitToken").value.trim()
   };
   setBusy(button, true);
-  setSetupMessage(mode === "overleaf"
-    ? "正在从 Overleaf 获取论文..."
-    : mode === "git"
-      ? "正在克隆 Git 仓库..."
-      : source.connectGit
-        ? "正在导入论文并连接 Git 仓库..."
-        : "正在导入论文...");
+  setSetupMessage(mode === "new"
+    ? "正在创建空白项目..."
+    : mode === "overleaf"
+      ? "正在从 Overleaf 获取论文..."
+      : mode === "git"
+        ? "正在克隆 Git 仓库..."
+        : source.connectGit
+          ? "正在导入论文并连接 Git 仓库..."
+          : "正在导入论文...");
   try {
     state.project = await api("/api/setup", {
       method: "POST",
@@ -1124,7 +1137,7 @@ async function submitSetup(event) {
     scheduleFastPreview(state.project.documents[0]?.file || state.project.config?.mainTex || "", 0);
     updateWarnings([]);
     if (state.project.documents.length) await loadDocument(state.project.documents[0].file);
-    toast(state.setupMode === "switch" ? "已打开新的论文项目，右侧显示快速预览。" : "论文已经连接，右侧显示快速预览。", "success");
+    toast("项目已打开，右侧显示快速预览。", "success");
   } catch (error) {
     setSetupMessage(error.message, "error");
   } finally {
@@ -1958,8 +1971,8 @@ function applyUndoStatus(status = {}) {
   if (state.project) state.project.undo = { ...status, count: state.undoCount, nextLabel: state.undoLabel };
   elements.undoButton.disabled = state.undoCount === 0;
   elements.undoButton.title = state.undoCount
-    ? `撤销：${state.undoLabel || "上一步操作"}（${state.undoCount}/10）`
-    : "没有可撤销的操作";
+    ? `撤销：${state.undoLabel || "上一步操作"}（Ctrl+Z，${state.undoCount}/10）`
+    : "没有可撤销的操作（Ctrl+Z）";
   elements.undoCount.textContent = String(state.undoCount);
   elements.undoCount.classList.toggle("hidden", state.undoCount === 0);
 }
@@ -2119,6 +2132,20 @@ async function undoLastChange() {
     setBusy(elements.undoButton, false);
     applyUndoStatus(state.project?.undo || { count: state.undoCount, nextLabel: state.undoLabel });
   }
+}
+
+function shouldUseNativeTextUndo(target) {
+  const editable = target?.closest("textarea, input, select, [contenteditable='true']");
+  if (!editable) return false;
+  if (editable === elements.sourceEditor) return state.sourceDirty;
+  if (editable.matches(".segment-textarea, .math-source-editor")) {
+    return editable.classList.contains("changed");
+  }
+  const tableRow = editable.closest(".table-row");
+  if (tableRow && editable.closest(".table-editor")) {
+    return tableRow.querySelector(".segment-status")?.classList.contains("english-changed") === true;
+  }
+  return true;
 }
 
 async function waitForPendingSaves(timeoutMs = 70_000) {
@@ -2832,7 +2859,7 @@ function openReferenceAddDialog() {
   elements.referenceAddForm?.reset();
   elements.referenceAddBib.value = "";
   elements.referenceAddKey.value = "";
-  elements.referenceAddStatus.textContent = "粘贴 DOI、doi.org 链接或论文网页链接，然后获取元数据。";
+  elements.referenceAddStatus.textContent = "粘贴 DOI、arXiv、IEEE 或普通网页链接，然后获取元数据。";
   renderReferenceAddBibFiles(state.references?.bibliographyFiles || []);
   elements.referenceAddDialog.showModal();
   window.setTimeout(() => elements.referenceAddUrl?.focus(), 0);
@@ -2845,7 +2872,7 @@ function closeReferenceAddDialog() {
 async function lookupNewReference() {
   const url = elements.referenceAddUrl.value.trim();
   if (!url) {
-    toast("请先输入论文链接或 DOI。", "error");
+    toast("请先输入 DOI、arXiv、IEEE 或普通网页链接。", "error");
     elements.referenceAddUrl.focus();
     return;
   }
@@ -2863,7 +2890,15 @@ async function lookupNewReference() {
       elements.referenceAddStatus.textContent = `发现可能重复文献：${result.duplicate.map((item) => item.key).join("、")}。请确认是否仍要加入。`;
       elements.referenceAddStatus.className = "reference-add-status warning";
     } else {
-      elements.referenceAddStatus.textContent = `已识别：${result.entry.fields?.title || result.entry.key}。可以修改 citation key 或 BibTeX 后加入。`;
+      const kind = result.metadata?.type === "preprint" ? "arXiv 预印本"
+        : result.metadata?.type === "webpage" ? "网页"
+          : "论文";
+      const doiNote = result.metadata?.doiDiscovery === "title-match"
+        ? ` 已根据页面标题找到 DOI：${result.metadata.doi}。`
+        : result.metadata?.doiDiscovery === "page"
+          ? ` 已从页面元数据找到 DOI：${result.metadata.doi}。`
+          : "";
+      elements.referenceAddStatus.textContent = `已识别为${kind}：${result.entry.fields?.title || result.entry.key}。${doiNote}可以修改 citation key 或 BibTeX 后加入。`;
       elements.referenceAddStatus.className = "reference-add-status";
     }
   } catch (error) {
@@ -3079,12 +3114,23 @@ function openCitationContextMenu(event, textarea) {
   const menu = document.createElement("div");
   menu.className = "citation-context-menu";
   menu.style.left = `${Math.min(event.clientX, window.innerWidth - 190)}px`;
-  menu.style.top = `${Math.min(event.clientY, window.innerHeight - 54)}px`;
-  const button = document.createElement("button");
-  button.type = "button";
-  button.innerHTML = '<i data-lucide="quote"></i><span>插入文献</span>';
-  button.addEventListener("click", () => openReferenceInsertDialog());
-  menu.append(button);
+  menu.style.top = `${Math.min(event.clientY, window.innerHeight - 100)}px`;
+  const appendAction = (icon, label, action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
+    button.addEventListener("click", () => {
+      closeCitationContextMenu();
+      void action(button);
+    });
+    menu.append(button);
+  };
+  appendAction("quote", "插入文献", () => openReferenceInsertDialog());
+  const segmentRow = textarea.classList.contains("segment-textarea") ? textarea.closest(".segment-row") : null;
+  const hasSelection = textarea.selectionEnd > textarea.selectionStart;
+  if (segmentRow?.commentParagraphAction && hasSelection) {
+    appendAction("percent", "注释选中内容", (button) => segmentRow.commentParagraphAction(button));
+  }
   menu.addEventListener("pointerdown", (innerEvent) => innerEvent.stopPropagation());
   document.body.append(menu);
   refreshIcons();
@@ -3120,21 +3166,34 @@ function attachCitationTarget(textarea) {
 }
 
 function renderDocumentList() {
-  const documents = state.project.documents;
-  elements.documentCount.textContent = String(documents.length);
+  const documents = state.project.documents || [];
+  const documentByFile = new Map(documents.map((item) => [item.file, item]));
+  const files = (state.project.sourceFiles || []).filter((file) => file.toLowerCase().endsWith(".tex"));
+  const visibleFiles = files.length ? files : documents.map((item) => item.file);
+  elements.documentCount.textContent = String(visibleFiles.length);
   elements.documentList.replaceChildren();
-  for (const item of documents) {
+  for (const file of visibleFiles) {
+    const item = documentByFile.get(file);
     const button = document.createElement("button");
-    button.className = `document-button ${item.file === state.currentFile ? "active" : ""}`;
+    button.className = `document-button ${file === state.currentFile || (state.mode === "source" && file === state.sourceFile) ? "active" : ""}`;
     button.type = "button";
     button.innerHTML = `
       <i data-lucide="file-text"></i>
       <span class="document-label"></span>
       <span class="document-progress"></span>
     `;
-    button.querySelector(".document-label").textContent = fileLabel(item.file);
-    button.querySelector(".document-progress").textContent = `${item.translated}/${item.segments}`;
-    button.addEventListener("click", () => loadDocument(item.file));
+    button.querySelector(".document-label").textContent = fileLabel(file);
+    button.querySelector(".document-progress").textContent = item ? `${item.translated}/${item.segments}` : "TeX";
+    button.addEventListener("click", async () => {
+      if (item) {
+        await loadDocument(file);
+        return;
+      }
+      if (!setMode("source", { loadCurrent: false })) return;
+      renderSourceFileOptions(file);
+      await loadSourceFile(file, { force: true });
+      renderDocumentList();
+    });
     elements.documentList.append(button);
   }
   updateTranslationProgress();
@@ -4046,16 +4105,16 @@ function applySegmentTranslationState(row, segment) {
   return true;
 }
 
-function enqueueSegmentTranslation(segment, chinese) {
+function enqueueSegmentTranslation(segment, chinese, { silent = false } = {}) {
   const key = segmentTranslationKey(segment);
   const existing = state.segmentTranslationJobs.get(key);
   if (existing) {
     if (existing.status === "failed") {
       state.segmentTranslationJobs.delete(key);
     } else {
-      toast(`${segmentTranslationLabel(existing)} 已在翻译队列中。`, "success", 2600);
+      if (!silent) toast(`${segmentTranslationLabel(existing)} 已在翻译队列中。`, "success", 2600);
       updateSegmentTranslationRow(existing);
-      return;
+      return false;
     }
   }
   const job = {
@@ -4073,8 +4132,9 @@ function enqueueSegmentTranslation(segment, chinese) {
   state.segmentTranslationQueue.push(key);
   updateSegmentTranslationRow(job);
   setFileTranslationProgress(0, Math.max(1, state.segmentTranslationJobs.size), `${segmentTranslationLabel(job)} · 已加入翻译队列`);
-  toast(`${segmentTranslationLabel(job)} 已加入翻译队列。`, "success", 2800);
+  if (!silent) toast(`${segmentTranslationLabel(job)} 已加入翻译队列。`, "success", 2800);
   runSegmentTranslationQueue();
+  return true;
 }
 
 function runSegmentTranslationQueue() {
@@ -4166,7 +4226,6 @@ function createSegmentRow(segment) {
       <div class="segment-actions">
         <button class="mini-button add-paragraph-button" type="button" title="在本段前后新增段落"><i data-lucide="plus"></i></button>
         <button class="mini-button translate-chinese-button" type="button" title="仅翻译本段到中文"><i data-lucide="languages"></i></button>
-        <button class="mini-button comment-paragraph-button" type="button" title="注释本段（Ctrl+/）"><i data-lucide="percent"></i></button>
         <button class="mini-button translate-button accent" type="button" title="用中文更新英文"><i data-lucide="arrow-right"></i></button>
         <button class="mini-button save-english-button" type="button" title="保存英文修改"><i data-lucide="save"></i></button>
         <button class="mini-button revert-button" type="button" title="恢复已加载的英文"><i data-lucide="undo-2"></i></button>
@@ -4184,7 +4243,6 @@ function createSegmentRow(segment) {
   const english = row.querySelector(".english");
   const addParagraphButton = row.querySelector(".add-paragraph-button");
   const translateChineseButton = row.querySelector(".translate-chinese-button");
-  const commentParagraphButton = row.querySelector(".comment-paragraph-button");
   const translateButton = row.querySelector(".translate-button");
   const saveEnglishButton = row.querySelector(".save-english-button");
   const revertButton = row.querySelector(".revert-button");
@@ -4282,7 +4340,7 @@ function createSegmentRow(segment) {
     }, 700));
   });
 
-  const commentParagraph = async () => {
+  const commentParagraph = async (trigger = null) => {
     const englishSelection = english.selectionEnd > english.selectionStart
       ? { selectionStart: english.selectionStart, selectionEnd: english.selectionEnd }
       : null;
@@ -4292,7 +4350,7 @@ function createSegmentRow(segment) {
       return;
     }
     clearSegmentSaveTimers(segment);
-    setBusy(commentParagraphButton, true);
+    setBusy(trigger, true);
     try {
       const result = await api("/api/segment/comment", {
         method: "POST",
@@ -4301,6 +4359,7 @@ function createSegmentRow(segment) {
           index: segment.index,
           sourceHash: latestSourceHash(),
           chinese: chinese.value,
+          deferCompile: state.project?.config?.autoCompile !== true,
           ...(englishSelection || {})
         })
       });
@@ -4314,20 +4373,20 @@ function createSegmentRow(segment) {
     } catch (error) {
       toast(error.message, "error", 5600);
     } finally {
-      setBusy(commentParagraphButton, false);
+      setBusy(trigger, false);
     }
   };
 
-  commentParagraphButton.addEventListener("click", commentParagraph);
+  row.commentParagraphAction = commentParagraph;
   chinese.addEventListener("keydown", (event) => {
     if (event.key !== "/" || (!event.ctrlKey && !event.metaKey)) return;
     event.preventDefault();
-    if (!commentParagraphButton.disabled) void commentParagraph();
+    void commentParagraph();
   });
   english.addEventListener("keydown", (event) => {
     if (event.key !== "/" || (!event.ctrlKey && !event.metaKey)) return;
     event.preventDefault();
-    if (!commentParagraphButton.disabled) void commentParagraph();
+    void commentParagraph();
   });
 
   english.addEventListener("input", () => {
@@ -4380,6 +4439,7 @@ function createSegmentRow(segment) {
       });
       state.currentDocument = result.document;
       const nextSegment = refreshSegmentSnapshot(result.document);
+      await refreshLoadedSourceFromDisk(result.document.file);
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
       invalidateReferences();
@@ -4589,23 +4649,20 @@ function createMathBlockRow(block) {
   return row;
 }
 
-function tableMatrix(block, kind) {
-  const english = (block.rows || []).map((row) => row.cells.map((cell) => cell.text || ""));
-  if (kind === "english") return english;
-  const chinese = Array.isArray(block.chineseRows) ? block.chineseRows : [];
-  return english.map((row, rowIndex) => row.map((cell, columnIndex) => (
-    chinese[rowIndex]?.[columnIndex] ?? cell
-  )));
+function tableMatrix(block) {
+  return (block.rows || []).map((row) => row.cells.map((cell) => cell.text || ""));
 }
 
-function createEditableTable(matrix, className) {
+function createEditableTable(matrix, className, { onContextMenu } = {}) {
   const table = document.createElement("table");
   table.className = `editable-paper-table ${className}`;
   const tbody = document.createElement("tbody");
-  matrix.forEach((row) => {
+  matrix.forEach((row, rowIndex) => {
     const tr = document.createElement("tr");
-    row.forEach((cell) => {
+    row.forEach((cell, columnIndex) => {
       const td = document.createElement("td");
+      td.dataset.rowIndex = String(rowIndex);
+      td.dataset.columnIndex = String(columnIndex);
       const textarea = document.createElement("textarea");
       textarea.value = cell;
       textarea.rows = 1;
@@ -4617,6 +4674,16 @@ function createEditableTable(matrix, className) {
         textarea.style.height = "auto";
         textarea.style.height = `${Math.max(34, textarea.scrollHeight)}px`;
       });
+      textarea.addEventListener("focus", () => {
+        table.querySelectorAll("td.table-cell-selected").forEach((item) => item.classList.remove("table-cell-selected"));
+        td.classList.add("table-cell-selected");
+      });
+      textarea.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        table.querySelectorAll("td.table-cell-selected").forEach((item) => item.classList.remove("table-cell-selected"));
+        td.classList.add("table-cell-selected");
+        onContextMenu?.({ event, rowIndex, columnIndex, table });
+      });
       td.append(textarea);
       tr.append(td);
     });
@@ -4627,9 +4694,49 @@ function createEditableTable(matrix, className) {
 }
 
 function readEditableTable(table) {
+  if (!table) return [];
   return [...table.querySelectorAll("tr")].map((row) => (
     [...row.querySelectorAll("textarea")].map((textarea) => textarea.value.trim())
   ));
+}
+
+function closeTableContextMenu() {
+  document.querySelector(".table-context-menu")?.remove();
+}
+
+function openTableContextMenu(event, { rowIndex, columnIndex, table, apply }) {
+  closeTableContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "table-context-menu citation-context-menu";
+  menu.style.left = `${Math.min(event.clientX, window.innerWidth - 230)}px`;
+  menu.style.top = `${Math.min(event.clientY, window.innerHeight - 250)}px`;
+  const actions = [
+    ["row-before", "上方插入一行", "rows-3"],
+    ["row-after", "下方插入一行", "rows-3"],
+    ["row-delete", "删除这一行", "minus"],
+    ["column-before", "左侧插入一列", "columns-3"],
+    ["column-after", "右侧插入一列", "columns-3"],
+    ["column-delete", "删除这一列", "columns-3"]
+  ];
+  for (const [action, label, icon] of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.innerHTML = `<i data-lucide="${icon}"></i><span>${label}</span>`;
+    button.addEventListener("click", () => {
+      closeTableContextMenu();
+      apply(action, rowIndex, columnIndex, table);
+    });
+    menu.append(button);
+  }
+  menu.addEventListener("pointerdown", (innerEvent) => innerEvent.stopPropagation());
+  document.body.append(menu);
+  refreshIcons();
+  window.setTimeout(() => {
+    document.addEventListener("pointerdown", closeTableContextMenu, { once: true });
+    document.addEventListener("keydown", (keyEvent) => {
+      if (keyEvent.key === "Escape") closeTableContextMenu();
+    }, { once: true });
+  }, 0);
 }
 
 function createTableBlockRow(block) {
@@ -4650,21 +4757,49 @@ function createTableBlockRow(block) {
       </div>
     </div>
     <div class="table-editor">
-      <div class="table-editor-label">中文表格</div>
-      <div class="table-editor-scroll chinese-table"></div>
-      <div class="table-editor-label">英文表格</div>
+      <div class="table-editor-toolbar">
+        <div class="table-editor-label">英文表格</div>
+        <span class="table-editor-note">右键单元格可添加或删除行列</span>
+      </div>
       <div class="table-editor-scroll english-table"></div>
     </div>
   `;
   const status = row.querySelector(".segment-status");
   const saveButton = row.querySelector(".save-table-button");
   const revertButton = row.querySelector(".revert-table-button");
-  const chineseShell = row.querySelector(".chinese-table");
   const englishShell = row.querySelector(".english-table");
+  let workingRows = tableMatrix(block);
+
+  const markTableDirty = () => {
+    status.textContent = "表格待保存";
+    status.className = "segment-status english-changed";
+  };
+
+  const updateTableShape = (action, rowIndex, columnIndex, table) => {
+    const current = readEditableTable(table);
+    const columnCount = Math.max(1, ...current.map((line) => line.length));
+    const rows = current.map((line) => Array.from({ length: columnCount }, (_value, index) => line[index] || ""));
+    if (action === "row-delete") {
+      if (rows.length <= 1) return toast("表格至少需要保留一行。", "warning", 3200);
+      rows.splice(rowIndex, 1);
+    } else if (action === "row-before" || action === "row-after") {
+      rows.splice(action === "row-before" ? rowIndex : rowIndex + 1, 0, Array(columnCount).fill(""));
+    } else if (action === "column-delete") {
+      if (columnCount <= 1) return toast("表格至少需要保留一列。", "warning", 3200);
+      rows.forEach((line) => line.splice(columnIndex, 1));
+    } else {
+      const insertAt = action === "column-before" ? columnIndex : columnIndex + 1;
+      rows.forEach((line) => line.splice(insertAt, 0, ""));
+    }
+    workingRows = rows;
+    renderTables();
+    markTableDirty();
+  };
 
   const renderTables = () => {
-    chineseShell.replaceChildren(createEditableTable(tableMatrix(block, "chinese"), "chinese"));
-    englishShell.replaceChildren(createEditableTable(tableMatrix(block, "english"), "english"));
+    englishShell.replaceChildren(createEditableTable(workingRows, "english", { onContextMenu: ({ event, rowIndex, columnIndex, table }) => (
+      openTableContextMenu(event, { rowIndex, columnIndex, table, apply: updateTableShape })
+    ) }));
     status.textContent = "表格";
     status.className = "segment-status synced";
   };
@@ -4674,11 +4809,13 @@ function createTableBlockRow(block) {
   renderTables();
   row.addEventListener("input", (event) => {
     if (!event.target.closest(".table-editor")) return;
-    status.textContent = "表格待保存";
-    status.className = "segment-status english-changed";
+    markTableDirty();
   });
 
-  revertButton.addEventListener("click", renderTables);
+  revertButton.addEventListener("click", () => {
+    workingRows = tableMatrix(block);
+    renderTables();
+  });
 
   saveButton.addEventListener("click", async () => {
     setBusy(saveButton, true);
@@ -4690,7 +4827,6 @@ function createTableBlockRow(block) {
           id: block.id,
           sourceHash: block.sourceHash,
           startLine: block.startLine,
-          chineseRows: readEditableTable(chineseShell.querySelector("table")),
           englishRows: readEditableTable(englishShell.querySelector("table")),
           deferCompile: state.project?.config?.autoCompile !== true
         })
@@ -4929,6 +5065,45 @@ function renderTranslationSections(documentPayload) {
   return sections;
 }
 
+function updateTranslateSectionButton() {
+  if (!elements.translateSectionButton) return;
+  const sectionId = state.currentSectionId;
+  const segments = state.currentDocument?.segments || [];
+  const fallback = `${state.currentDocument?.file || ""}:section:0`;
+  elements.translateSectionButton.disabled = !sectionId || !segments.some((segment) => (segment.sectionId || fallback) === sectionId);
+}
+
+function translateCurrentSection() {
+  if (!state.currentDocument || !state.currentSectionId) return;
+  const fallback = `${state.currentDocument.file}:section:0`;
+  const segments = state.currentDocument.segments.filter((segment) => (segment.sectionId || fallback) === state.currentSectionId);
+  let queued = 0;
+  let missingChinese = 0;
+  for (const segment of segments) {
+    const chinese = String(segment.chinese || "").trim();
+    if (!chinese) {
+      missingChinese += 1;
+      continue;
+    }
+    if (enqueueSegmentTranslation(segment, chinese, { silent: true })) queued += 1;
+  }
+  if (!queued) {
+    toast(
+      missingChinese
+        ? "本节还没有可用于更新英文的中文工作稿，请先填写或生成中文。"
+        : "本节段落已经在翻译队列中。",
+      missingChinese ? "warning" : "success",
+      4200
+    );
+    return;
+  }
+  toast(
+    `本节已有 ${queued} 个段落加入翻译队列${missingChinese ? `，另有 ${missingChinese} 段缺少中文工作稿` : ""}。`,
+    missingChinese ? "warning" : "success",
+    4600
+  );
+}
+
 function renderSegments() {
   const documentPayload = state.currentDocument;
   const sections = renderTranslationSections(documentPayload);
@@ -4986,6 +5161,7 @@ function renderSegments() {
   fitAllSegmentRows();
   renderDocumentList();
   updateTranslateFileButton();
+  updateTranslateSectionButton();
   refreshIcons();
 }
 
@@ -5236,30 +5412,70 @@ async function loadSourceFile(file, { force = false } = {}) {
   }
 }
 
+async function refreshLoadedSourceFromDisk(file) {
+  if (!file || state.sourceFile !== file || state.sourceDirty || state.sourceSaveInFlight) return false;
+  try {
+    const source = await api(`/api/source?file=${encodeURIComponent(file)}`);
+    if (state.sourceFile !== file || state.sourceDirty || state.sourceSaveInFlight) return false;
+    state.sourceHash = source.sourceHash;
+    state.sourceEol = source.eol || "\n";
+    elements.sourceEditor.value = source.content;
+    state.sourceSavedContent = source.content;
+    updateSourceLineNumbers();
+    setSourceDirty(false);
+    refreshSourceSearch({ keepIndex: true });
+    return true;
+  } catch (error) {
+    console.warn("Unable to refresh the loaded TeX source:", error);
+    return false;
+  }
+}
+
+function scheduleSourceAutosave(delay = 850) {
+  window.clearTimeout(state.sourceAutosaveTimer);
+  state.sourceAutosaveTimer = window.setTimeout(() => {
+    state.sourceAutosaveTimer = 0;
+    void saveSourceFile({ quiet: true, automatic: true });
+  }, delay);
+}
+
 async function saveSourceFile(options = {}) {
   const deferCompile = options.deferCompile ?? true;
   const quiet = options.quiet === true;
   if (!state.sourceFile || !state.sourceDirty) return true;
+  if (state.sourceSaveInFlight) {
+    state.sourceSavePending = true;
+    return false;
+  }
+  window.clearTimeout(state.sourceAutosaveTimer);
+  state.sourceAutosaveTimer = 0;
+  const requestedFile = state.sourceFile;
+  const requestedContent = elements.sourceEditor.value;
+  const requestedHash = state.sourceHash;
   const button = elements.saveSourceButton;
+  let saveSucceeded = false;
+  state.sourceSaveInFlight = true;
   setBusy(button, true);
   try {
     const result = await api("/api/source", {
       method: "POST",
       body: JSON.stringify({
-        file: state.sourceFile,
+        file: requestedFile,
         content: state.sourceEol === "\r\n"
-          ? elements.sourceEditor.value.replace(/\n/g, "\r\n")
-          : elements.sourceEditor.value,
-        sourceHash: state.sourceHash,
+          ? requestedContent.replace(/\n/g, "\r\n")
+          : requestedContent,
+        sourceHash: requestedHash,
         deferCompile,
-        refreshDocument: options.refreshDocument === true
+        refreshDocument: options.refreshDocument === true || requestedFile.toLowerCase().endsWith(".tex")
       })
     });
-    state.sourceHash = result.source.sourceHash;
-    state.sourceEol = result.source.eol || state.sourceEol;
-    state.sourceSavedContent = elements.sourceEditor.value;
-    state.sourceDirty = false;
-    if (options.refreshPreview !== false) scheduleFastPreview(previewFileAfterSourceChange(state.sourceFile), 0);
+    if (state.sourceFile === requestedFile) {
+      state.sourceHash = result.source.sourceHash;
+      state.sourceEol = result.source.eol || state.sourceEol;
+      state.sourceSavedContent = requestedContent;
+      state.sourceDirty = elements.sourceEditor.value !== requestedContent;
+    }
+    if (options.refreshPreview !== false) scheduleFastPreview(previewFileAfterSourceChange(requestedFile), 0);
     updateBuild(result.build);
     const savedFile = result.source.file;
     if (result.project) state.project = result.project;
@@ -5267,8 +5483,6 @@ async function saveSourceFile(options = {}) {
     if (result.document && savedFile === state.currentFile) {
       state.currentDocument = result.document;
       renderSegments();
-    } else if (savedFile === state.currentFile) {
-      state.currentDocument = null;
     }
     if (!quiet) {
       const kind = state.sourceFile.toLowerCase().endsWith(".bib") ? "Bib" : "TeX";
@@ -5282,6 +5496,7 @@ async function saveSourceFile(options = {}) {
         5200
       );
     }
+    saveSucceeded = true;
     return true;
   } catch (error) {
     if (error.status === 409 && error.payload?.code === "SOURCE_CHANGED") {
@@ -5294,35 +5509,95 @@ async function saveSourceFile(options = {}) {
     }
     return false;
   } finally {
+    state.sourceSaveInFlight = false;
     setBusy(button, false);
     setSourceDirty(elements.sourceEditor.value !== state.sourceSavedContent);
+    if (saveSucceeded && (state.sourceSavePending || state.sourceDirty)) {
+      state.sourceSavePending = false;
+      scheduleSourceAutosave(220);
+    } else if (!saveSucceeded) {
+      state.sourceSavePending = false;
+    }
   }
 }
 
-async function createTexFile() {
+function texHeadingOptions(source) {
+  return String(source.content || "").split(/\r?\n/).flatMap((line, index) => {
+    const match = line.match(/^\s*\\(chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(?:\[[^\]]*\])?\s*\{([^{}]+)\}/);
+    if (!match) return [];
+    const depth = ["chapter", "section", "subsection", "subsubsection", "paragraph", "subparagraph"].indexOf(match[1]);
+    return [{ line: index + 1, title: `${"　".repeat(Math.max(0, depth))}${match[2].trim()}` }];
+  });
+}
+
+async function openCreateTexDialog() {
   if (state.sourceDirty) {
     const saved = await saveSourceFile({ deferCompile: true, quiet: true, refreshPreview: false });
     if (!saved) return;
   }
-  const file = window.prompt("请输入新的 TeX 文件名，例如 sections/new-section.tex", "new-section.tex");
-  if (file === null) return;
-  const prepared = file.trim();
+  elements.newTexFileName.value = "sections/new-section.tex";
+  elements.newTexInsertion.replaceChildren();
+  const options = [
+    { value: "none", label: "只创建文件，不插入主 TeX" },
+    { value: "end", label: `插入到 ${state.project?.config?.mainTex || "main.tex"} 末尾` }
+  ];
+  try {
+    const mainTex = state.project?.config?.mainTex;
+    if (mainTex) {
+      const source = await api(`/api/source?file=${encodeURIComponent(mainTex)}`);
+      elements.createTexDialog.dataset.mainSourceHash = source.sourceHash;
+      for (const heading of texHeadingOptions(source)) {
+        options.push({ value: `after-section:${heading.line}`, label: `插入到“${heading.title}”章节末尾` });
+      }
+    }
+  } catch (error) {
+    elements.createTexDialog.dataset.mainSourceHash = "";
+    toast(`无法读取主 TeX 的章节位置：${error.message}`, "error", 5200);
+  }
+  for (const item of options) {
+    const option = document.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    elements.newTexInsertion.append(option);
+  }
+  elements.newTexInsertion.value = options.some((item) => item.value.startsWith("after-section:"))
+    ? options.find((item) => item.value.startsWith("after-section:")).value
+    : "end";
+  elements.createTexDialog.showModal();
+  refreshIcons();
+  window.setTimeout(() => elements.newTexFileName.focus(), 0);
+}
+
+function closeCreateTexDialog() {
+  elements.createTexDialog.close();
+}
+
+async function createTexFile(event) {
+  event.preventDefault();
+  const prepared = elements.newTexFileName.value.trim();
   if (!prepared) return;
+  const selected = elements.newTexInsertion.value;
+  const insertion = selected.startsWith("after-section:")
+    ? { mode: "after-section", line: Number(selected.split(":")[1]), sourceHash: elements.createTexDialog.dataset.mainSourceHash || "" }
+    : { mode: selected === "end" ? "end" : "none", sourceHash: elements.createTexDialog.dataset.mainSourceHash || "" };
+  setBusy(elements.submitCreateTexButton, true);
   setBusy(elements.createTexFileButton, true);
   try {
     const result = await api("/api/source/create", {
       method: "POST",
-      body: JSON.stringify({ file: prepared })
+      body: JSON.stringify({ file: prepared, insertion })
     });
     state.project = result.project;
+    closeCreateTexDialog();
     if (state.mode !== "source") setMode("source", { loadCurrent: false });
     renderDocumentList();
     renderSourceFileOptions(result.source.file);
     await loadSourceFile(result.source.file, { force: true });
-    toast("TeX 文件已创建。", "success");
+    toast(result.insertion ? `TeX 文件已创建，并已写入 ${result.insertion.mainTex}。` : "TeX 文件已创建。", "success");
   } catch (error) {
     toast(error.message, "error", 5200);
   } finally {
+    setBusy(elements.submitCreateTexButton, false);
     setBusy(elements.createTexFileButton, false);
   }
 }
@@ -6206,7 +6481,28 @@ async function exportPdf() {
   }
 }
 
+function updateModeButtons() {
+  document.querySelectorAll(".mode-button").forEach((button) => {
+    const active = button.dataset.mode === "references"
+      ? state.referencesOpen
+      : button.dataset.mode === state.mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function setReferencesOpen(open) {
+  state.referencesOpen = Boolean(open);
+  elements.workspace.classList.toggle("references-open", state.referencesOpen);
+  elements.referencesView.classList.toggle("hidden", !state.referencesOpen);
+  elements.previewPanel.classList.toggle("hidden", state.referencesOpen);
+  updateModeButtons();
+  if (state.referencesOpen) void loadReferences();
+  return true;
+}
+
 function setMode(mode, { loadCurrent = true } = {}) {
+  if (mode === "references") return setReferencesOpen(!state.referencesOpen);
   if (state.mode === "source" && mode !== "source" && state.sourceDirty) {
     if (!confirmDiscardSourceChanges()) return false;
     elements.sourceEditor.value = state.sourceSavedContent;
@@ -6214,20 +6510,15 @@ function setMode(mode, { loadCurrent = true } = {}) {
     setSourceDirty(false);
   }
   state.mode = mode;
-  const referencesOpen = mode === "references";
-  document.querySelectorAll(".mode-button").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
-  elements.workspace.classList.toggle("references-open", referencesOpen);
-  elements.editView.classList.toggle("hidden", mode !== "edit" && !referencesOpen);
+  updateModeButtons();
+  elements.editView.classList.toggle("hidden", mode !== "edit");
   elements.sourceView.classList.toggle("hidden", mode !== "source");
-  elements.referencesView.classList.toggle("hidden", !referencesOpen);
   elements.formatView.classList.toggle("hidden", mode !== "format");
-  elements.previewPanel.classList.toggle("hidden", referencesOpen);
   if (mode === "source") {
     renderSourceFileOptions(loadCurrent ? state.currentFile : state.sourceFile);
     if (loadCurrent) void loadSourceFile(elements.sourceFileSelect.value, { force: true });
   }
   if (mode === "edit" && state.currentFile && loadCurrent) void loadDocument(state.currentFile);
-  if (mode === "references") void loadReferences();
   if (mode === "format") loadLatestFormatJob();
   return true;
 }
@@ -6501,6 +6792,7 @@ function bindEvents() {
   document.querySelector("#pullButton").addEventListener("click", pullPaper);
   document.querySelector("#pushButton").addEventListener("click", pushPaper);
   document.querySelector("#translateFileButton").addEventListener("click", translateCurrentFile);
+  elements.translateSectionButton.addEventListener("click", translateCurrentSection);
   elements.terminologyButton.addEventListener("click", openTerminologyDialog);
   document.querySelector("#closeTerminologyButton").addEventListener("click", closeTerminologyDialog);
   document.querySelector("#cancelTerminologyButton").addEventListener("click", closeTerminologyDialog);
@@ -6526,6 +6818,9 @@ function bindEvents() {
     if (event.submitter?.id === "referenceLookupButton") void lookupNewReference();
     else void addNewReference();
   });
+  // DOI 可以是 10.xxxx/... 这种不是 URL 的纯文本；不要让旧版页面或 Electron
+  // 的原生 type=url 校验在 BibTeX 已经识别成功后再次拦截“加入 Bib 文件”。
+  elements.referenceAddForm.noValidate = true;
   elements.referenceAddKey.addEventListener("input", () => {
     const key = elements.referenceAddKey.value.trim();
     if (!key || !elements.referenceAddBib.value.trim()) return;
@@ -6549,7 +6844,7 @@ function bindEvents() {
     }
     insertCitationAtCurrentTarget(entry);
   });
-  elements.closeReferencesButton.addEventListener("click", () => setMode("edit", { loadCurrent: false }));
+  elements.closeReferencesButton.addEventListener("click", () => setReferencesOpen(false));
   elements.referenceInsertSearch.addEventListener("input", renderReferenceInsertList);
   document.querySelector("#closeReferenceInsertButton").addEventListener("click", closeReferenceInsertDialog);
   document.querySelector("#cancelReferenceInsertButton").addEventListener("click", closeReferenceInsertDialog);
@@ -6722,6 +7017,7 @@ function bindEvents() {
   elements.translationSectionSelect.addEventListener("change", (event) => {
     state.currentSectionId = event.currentTarget.value;
     renderFileTranslationProgress(state.currentFile);
+    updateTranslateSectionButton();
   });
   elements.sourceFileSelect.addEventListener("change", async (event) => {
     const previous = state.sourceFile;
@@ -6732,7 +7028,10 @@ function bindEvents() {
     updateSourceLineNumbers();
     setSourceDirty(elements.sourceEditor.value !== state.sourceSavedContent);
     refreshSourceSearch({ keepIndex: true });
-    if (state.sourceFile?.toLowerCase().endsWith(".tex")) scheduleFastPreview(state.sourceFile, 160);
+    if (state.sourceFile?.toLowerCase().endsWith(".tex")) {
+      scheduleFastPreview(state.sourceFile, 160);
+      scheduleSourceAutosave();
+    }
   });
   elements.sourceEditor.addEventListener("scroll", () => {
     elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
@@ -6794,12 +7093,19 @@ function bindEvents() {
       || document.querySelector("dialog[open]")
     ) return;
     const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("textarea, input, select, [contenteditable='true']")) return;
+    if (shouldUseNativeTextUndo(target)) return;
     event.preventDefault();
     if (state.undoCount) void undoLastChange();
   });
   elements.saveSourceButton.addEventListener("click", () => saveSourceFile());
-  elements.createTexFileButton.addEventListener("click", createTexFile);
+  elements.createTexFileButton.addEventListener("click", openCreateTexDialog);
+  elements.createTexForm.addEventListener("submit", createTexFile);
+  document.querySelector("#closeCreateTexButton").addEventListener("click", closeCreateTexDialog);
+  document.querySelector("#cancelCreateTexButton").addEventListener("click", closeCreateTexDialog);
+  elements.createTexDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeCreateTexDialog();
+  });
   elements.modularizeButton.addEventListener("click", previewPaperStructure);
   elements.structureForm.addEventListener("submit", applyPaperStructure);
   elements.migrateBibliographyButton.addEventListener("click", migrateBibliographyForStructure);
@@ -6854,6 +7160,26 @@ function bindEvents() {
   document.querySelector("#testFormatButton").addEventListener("click", (event) => testProvider("format", event.currentTarget));
 }
 
+function applyPBLaTexEntryView() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("pblatex") !== "1") return;
+  document.title = "PBLaTex Workbench";
+  const brandName = document.querySelector(".brand-name");
+  if (brandName) brandName.textContent = "PBLaTex";
+  const requested = params.get("view");
+  if (requested === "references") {
+    setReferencesOpen(true);
+    return;
+  }
+  if (requested === "edit") setMode("edit", { loadCurrent: false });
+  if (requested === "source") setMode("source", { loadCurrent: false });
+  if (requested === "preview") {
+    setPreviewMode("fast");
+    elements.pdfScroll.setAttribute("tabindex", "-1");
+    elements.pdfScroll.focus({ preventScroll: true });
+  }
+}
+
 async function initialize() {
   bindEvents();
   window.paperBridgeDesktop?.onCloseRequest?.(handleDesktopCloseRequest);
@@ -6865,6 +7191,7 @@ async function initialize() {
   refreshIcons();
   try {
     const ready = await refreshProject({ preserveDocument: false });
+    applyPBLaTexEntryView();
     updateWarnings([]);
   } catch (error) {
     toast(error.message, "error", 8000);

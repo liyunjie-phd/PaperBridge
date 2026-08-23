@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
+import test from "node:test";
+
+test("PBLaTex extension scaffold is named and wired as a LaTeX Workshop companion", async () => {
+  const root = process.cwd();
+  const manifest = JSON.parse(await fs.readFile(path.join(root, "pblatex-vscode", "package.json"), "utf8"));
+  const readme = await fs.readFile(path.join(root, "pblatex-vscode", "README.md"), "utf8");
+  const extension = await fs.readFile(path.join(root, "pblatex-vscode", "src", "extension.js"), "utf8");
+  const viewProvider = await fs.readFile(path.join(root, "pblatex-vscode", "src", "referenceWorkbench.js"), "utf8");
+  const workbench = await fs.readFile(path.join(root, "pblatex-vscode", "media", "workbench.js"), "utf8");
+  const server = await fs.readFile(path.join(root, "server.js"), "utf8");
+  const desktopApp = await fs.readFile(path.join(root, "public", "app.js"), "utf8");
+  const desktopHtml = await fs.readFile(path.join(root, "public", "index.html"), "utf8");
+
+  assert.equal(manifest.name, "pblatex");
+  assert.equal(manifest.displayName, "PBLaTex");
+  assert.ok(manifest.activationEvents.includes("onView:pblatex.references"));
+  assert.equal(manifest.contributes.views.pblatex[0].type, "webview");
+  assert.ok(manifest.contributes.commands.some((item) => item.command === "pblatex.openBilingualEditor"));
+  assert.ok(manifest.contributes.commands.some((item) => item.command === "pblatex.openFastPreview"));
+  assert.ok(manifest.contributes.commands.some((item) => item.command === "pblatex.reviewActiveDocument"));
+  assert.match(readme, /LaTeX Workshop/);
+  assert.match(readme, /searching references/);
+  assert.match(extension, /simpleBrowser\.show/);
+  assert.match(extension, /showWorkbenchPage/);
+  assert.match(extension, /location: vscode\.ProgressLocation\.Window/);
+  assert.doesNotMatch(extension, /location: vscode\.ProgressLocation\.Notification/);
+  assert.doesNotMatch(viewProvider, /showErrorMessage/);
+  assert.match(extension, /lookupReferenceUrl/);
+  assert.match(extension, /metadataToBibEntry/);
+  assert.match(extension, /installDomMatrixStub/);
+  assert.doesNotMatch(extension, /import \{ startServer, stopServer \} from "\.\.\/\.\.\/server\.js"/);
+  assert.match(workbench, /打开工作台/);
+  assert.match(workbench, /连接当前项目/);
+  assert.doesNotMatch(workbench, /双语翻译|快速预览|AI 审改|文献工作台|DOI \/ URL|插入引用/);
+  assert.equal(manifest.contributes.menus["view/title"].length, 2);
+  assert.ok(!manifest.contributes.menus["view/title"].some((item) => item.command === "pblatex.refreshReferences"));
+  assert.match(server, /app\.post\("\/api\/review"/);
+  assert.match(desktopHtml, /id="translateSectionButton"/);
+  assert.match(desktopApp, /function translateCurrentSection\(\)/);
+  assert.match(desktopApp, /enqueueSegmentTranslation\(segment, chinese, \{ silent: true \}\)/);
+});

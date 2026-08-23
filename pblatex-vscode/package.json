@@ -1,0 +1,112 @@
+{
+  "name": "pblatex",
+  "displayName": "PBLaTex",
+  "description": "VS Code companion for LaTeX Workshop with bilingual paper editing and bibliography workbench support",
+  "version": "0.1.0",
+  "type": "module",
+  "publisher": "paperbridge",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/*.tex",
+    "onView:pblatex.references",
+    "onCommand:pblatex.openWorkbench",
+    "onCommand:pblatex.openBilingualEditor",
+    "onCommand:pblatex.openFastPreview",
+    "onCommand:pblatex.openReferences",
+    "onCommand:pblatex.reviewActiveDocument",
+    "onCommand:pblatex.refreshReferences",
+    "onCommand:pblatex.insertCitation",
+    "onCommand:pblatex.addReference",
+    "onCommand:pblatex.connectCurrentWorkspace"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "pblatex.openWorkbench",
+        "title": "PBLaTex: Open Workbench",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "pblatex.openBilingualEditor",
+        "title": "PBLaTex: Open Bilingual Editor",
+        "icon": "$(preview)"
+      },
+      {
+        "command": "pblatex.openFastPreview",
+        "title": "PBLaTex: Open Fast Preview",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "pblatex.openReferences",
+        "title": "PBLaTex: Open Reference Workbench",
+        "icon": "$(references)"
+      },
+      {
+        "command": "pblatex.reviewActiveDocument",
+        "title": "PBLaTex: AI Review Active TeX",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "pblatex.refreshReferences",
+        "title": "PBLaTex: Refresh References"
+      },
+      {
+        "command": "pblatex.insertCitation",
+        "title": "PBLaTex: Insert Citation"
+      },
+      {
+        "command": "pblatex.addReference",
+        "title": "PBLaTex: Add Reference"
+      },
+      {
+        "command": "pblatex.connectCurrentWorkspace",
+        "title": "PBLaTex: Connect Current Workspace"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "pblatex",
+          "title": "PBLaTex",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "pblatex": [
+        {
+          "id": "pblatex.references",
+          "name": "Paper Workbench",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "pblatex.openWorkbench",
+          "when": "view == pblatex.references",
+          "group": "navigation@1"
+        },
+        {
+          "command": "pblatex.connectCurrentWorkspace",
+          "when": "view == pblatex.references",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "pblatex.insertCitation",
+          "when": "editorTextFocus && resourceExtname == .tex",
+          "group": "navigation"
+        }
+      ]
+    }
+  }
+}

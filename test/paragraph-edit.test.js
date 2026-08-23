@@ -362,6 +362,7 @@ test("paragraph API comments only the selected English text", async () => {
       selectionEnd: selectionStart + selected.length
     });
     document = result.document;
+    assert.equal(result.build, null);
     assert.equal(document.segments.length, 2);
     assert.equal(document.segments[0].chinese, "partial Chinese draft");
     assert.match(document.segments[0].english, /Alpha introduction/);

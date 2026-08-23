@@ -1212,6 +1212,18 @@ body.workspace-split-dragging * {
   background: #fffdfa;
 }
 
+.table-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.table-editor-note {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .table-editor-label {
   color: #5f676d;
   font-size: 11px;
@@ -1235,6 +1247,12 @@ body.workspace-split-dragging * {
   border: 1px solid #e2e7ea;
   padding: 0;
   vertical-align: top;
+}
+
+.editable-paper-table td.table-cell-selected {
+  outline: 2px solid #2f7e63;
+  outline-offset: -2px;
+  background: #f0f8f4;
 }
 
 .editable-paper-table textarea {
@@ -2071,6 +2089,7 @@ body.workspace-split-dragging * {
 .setup-dialog,
 .settings-dialog,
 .main-tex-dialog,
+.create-tex-dialog,
 .terminology-dialog,
 .reference-insert-dialog,
 .reference-add-dialog,
@@ -2111,6 +2130,10 @@ body.workspace-split-dragging * {
   width: min(520px, calc(100vw - 36px));
 }
 
+.create-tex-dialog {
+  width: min(600px, calc(100vw - 36px));
+}
+
 .terminology-dialog {
   width: min(1080px, calc(100vw - 36px));
 }
@@ -2138,6 +2161,7 @@ body.workspace-split-dragging * {
 .setup-dialog::backdrop,
 .settings-dialog::backdrop,
 .main-tex-dialog::backdrop,
+.create-tex-dialog::backdrop,
 .terminology-dialog::backdrop,
 .reference-insert-dialog::backdrop,
 .reference-add-dialog::backdrop,
@@ -2211,12 +2235,16 @@ body.workspace-split-dragging * {
 
 .source-switch {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-strong);
+}
+
+.setup-optional-note {
+  margin: -4px 0 12px;
 }
 
 .source-switch input {
@@ -3116,7 +3144,8 @@ textarea.citation-drop-target {
   overflow: hidden;
 }
 
-.citation-context-menu {
+.citation-context-menu,
+.table-context-menu {
   position: fixed;
   z-index: 1000;
   min-width: 150px;
@@ -3127,7 +3156,8 @@ textarea.citation-drop-target {
   box-shadow: 0 12px 32px rgba(20, 30, 40, 0.18);
 }
 
-.citation-context-menu button {
+.citation-context-menu button,
+.table-context-menu button {
   width: 100%;
   display: flex;
   align-items: center;
@@ -3142,11 +3172,13 @@ textarea.citation-drop-target {
   cursor: pointer;
 }
 
-.citation-context-menu button:hover {
+.citation-context-menu button:hover,
+.table-context-menu button:hover {
   background: var(--surface-soft);
 }
 
-.citation-context-menu svg {
+.citation-context-menu svg,
+.table-context-menu svg {
   width: 15px;
   height: 15px;
 }
@@ -3183,6 +3215,12 @@ textarea.citation-drop-target {
 .main-tex-body {
   display: grid;
   gap: 10px;
+  padding: 16px;
+}
+
+.create-tex-body {
+  display: grid;
+  gap: 16px;
   padding: 16px;
 }
 

@@ -245,12 +245,70 @@ test("sidebar owns project switching and new TeX while source view follows the s
 
   assert.match(indexHtml, /id="sidebarProjectList"/);
   assert.match(indexHtml, /id="createTexFileButton"[\s\S]*id="documentList"/);
+  assert.match(indexHtml, /id="createTexDialog"[\s\S]*id="newTexFileName"[\s\S]*id="newTexInsertion"/);
   assert.doesNotMatch(indexHtml, /source-file-select[\s\S]{0,260}id="createTexFileButton"/);
   assert.match(appJs, /function renderSidebarProjectList/);
+  assert.match(appJs, /function openCreateTexDialog/);
+  assert.match(appJs, /mode:\s*"after-section"/);
+  assert.match(appJs, /elements\.createTexDialog\.showModal\(\)/);
   assert.match(appJs, /renderSourceFileOptions\(file\)/);
   assert.match(appJs, /renderSourceFileOptions\(loadCurrent \? state\.currentFile : state\.sourceFile\)/);
   assert.doesNotMatch(appJs, /insert-figure-button/);
   assert.match(styles, /\.project-switch-button/);
+});
+
+test("TeX source changes autosave without compiling and refresh the bilingual document", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const saveStart = appJs.indexOf("async function saveSourceFile");
+  const saveBlock = appJs.slice(saveStart, appJs.indexOf("function texHeadingOptions", saveStart));
+  const inputStart = appJs.indexOf('elements.sourceEditor.addEventListener("input"');
+  const inputBlock = appJs.slice(inputStart, appJs.indexOf('elements.sourceEditor.addEventListener("scroll"', inputStart));
+
+  assert.match(saveBlock, /refreshDocument:\s*options\.refreshDocument === true \|\| requestedFile\.toLowerCase\(\)\.endsWith\("\.tex"\)/);
+  assert.match(saveBlock, /const deferCompile = options\.deferCompile \?\? true/);
+  assert.match(inputBlock, /scheduleSourceAutosave\(\)/);
+  assert.match(appJs, /await refreshLoadedSourceFromDisk\(result\.document\.file\)/);
+});
+
+test("paragraph comment UI defers compilation unless auto compile is enabled", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const serverJs = await fs.readFile(path.join(process.cwd(), "server.js"), "utf8");
+  const commentStart = appJs.indexOf('api("/api/segment/comment"');
+  const commentBlock = appJs.slice(commentStart, appJs.indexOf("});", commentStart));
+  assert.match(commentBlock, /deferCompile:\s*state\.project\?\.config\?\.autoCompile !== true/);
+  const serverStart = serverJs.indexOf("async function commentParagraph");
+  const serverBlock = serverJs.slice(serverStart, serverJs.indexOf("async function saveMathBlock", serverStart));
+  assert.match(serverBlock, /deferCompile = true/);
+  assert.match(serverBlock, /build: deferCompile \? null : await maybeCompile/);
+});
+
+test("paragraph comments are exposed from the selection context menu instead of the row toolbar", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const rowStart = appJs.indexOf('row.innerHTML = `');
+  const rowBlock = appJs.slice(rowStart, appJs.indexOf("`;", rowStart));
+  assert.doesNotMatch(rowBlock, /comment-paragraph-button/);
+  assert.match(appJs, /注释选中内容/);
+  assert.match(appJs, /segmentRow\?\.commentParagraphAction/);
+  assert.match(appJs, /async \(trigger = null\) =>/);
+});
+
+test("table editor exposes a single English grid with row and column context actions", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
+  const tableStart = appJs.indexOf("function createTableBlockRow");
+  const tableBlock = appJs.slice(tableStart, appJs.indexOf("function openParagraphDialog", tableStart));
+
+  assert.match(tableBlock, /英文表格/);
+  assert.doesNotMatch(tableBlock, /chinese-table/);
+  assert.match(appJs, /row-before/);
+  assert.match(appJs, /row-after/);
+  assert.match(appJs, /column-before/);
+  assert.match(appJs, /column-after/);
+  assert.match(appJs, /row-delete/);
+  assert.match(appJs, /column-delete/);
+  assert.match(tableBlock, /右键单元格可添加或删除行列/);
+  assert.match(styles, /\.table-context-menu/);
+  assert.match(styles, /\.table-cell-selected/);
 });
 
 test("PDF double-click navigation constrains matches by page text and source order", async () => {

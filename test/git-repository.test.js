@@ -628,3 +628,10 @@ test("push UI does not block on local PDF compilation and explains remaining fil
   assert.match(pushBlock, /changedFiles/);
   assert.match(pushBlock, /仍有 \$\{pending\} 个本地文件未提交/);
 });
+
+test("bundled Windows Git uses OpenSSL instead of the failing Schannel backend", async () => {
+  const projectJs = await fs.readFile(path.join(process.cwd(), "lib", "project.js"), "utf8");
+  assert.match(projectJs, /git\.source === "bundled"/);
+  assert.match(projectJs, /http\.sslBackend=openssl/);
+  assert.match(projectJs, /SEC_E_NO_CREDENTIALS/);
+});

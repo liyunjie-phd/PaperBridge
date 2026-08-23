@@ -4,6 +4,7 @@ storage-location.txt
 data/
 projects/
 release/
+source-backups/
 resources/bin/
 .codex-lrtp-probe/
 .DS_Store

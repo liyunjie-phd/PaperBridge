@@ -13,7 +13,10 @@
     "test": "node --test",
     "build:dir": "electron-builder --dir --win --x64",
     "build:setup": "electron-builder --win nsis --x64",
-    "build:setup:slim": "electron-builder --config build/electron-builder.slim.cjs --win nsis --x64"
+    "build:setup:slim": "electron-builder --config build/electron-builder.slim.cjs --win nsis --x64",
+    "build:mac": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --universal",
+    "build:mac:x64": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --x64",
+    "build:mac:arm64": "electron-builder --config build/electron-builder.mac.cjs --mac dmg zip --arm64"
   },
   "dependencies": {
     "dugite": "^3.2.2",
@@ -57,12 +60,14 @@
         "from": "resources/bin",
         "to": "bin",
         "filter": [
-          "tectonic.exe"
+          "tectonic.exe",
+          "darwin-x64/tectonic",
+          "darwin-arm64/tectonic"
         ]
       }
     ],
     "directories": {
-      "output": "release"
+      "output": "release/windows"
     },
     "win": {
       "icon": "resources/icon.ico",
@@ -71,6 +76,27 @@
           "target": "nsis",
           "arch": [
             "x64"
+          ]
+        }
+      ]
+    },
+    "mac": {
+      "icon": "resources/icon.png",
+      "category": "public.app-category.productivity",
+      "artifactName": "PaperBridge-${version}-mac-${arch}.${ext}",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
           ]
         }
       ]

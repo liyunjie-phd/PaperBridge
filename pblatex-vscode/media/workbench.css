@@ -1,0 +1,122 @@
+/* Hallmark - pre-emit critique: P5 H5 E5 S5 R5 V4 - compact VS Code launcher */
+:root {
+  color-scheme: light dark;
+  --color-bg: var(--vscode-sideBar-background);
+  --color-fg: var(--vscode-sideBar-foreground);
+  --color-muted: var(--vscode-descriptionForeground);
+  --color-border: var(--vscode-editorWidget-border);
+  --color-accent: var(--vscode-button-background);
+  --color-accent-fg: var(--vscode-button-foreground);
+  --color-hover: var(--vscode-button-hoverBackground);
+  --color-focus: var(--vscode-focusBorder);
+  --color-error: var(--vscode-errorForeground);
+  --color-success: var(--vscode-testing-iconPassed);
+}
+
+body {
+  margin: 0;
+  padding: 12px;
+  color: var(--color-fg);
+  background: var(--color-bg);
+  font: 13px/1.45 var(--vscode-font-family);
+}
+
+.header {
+  margin-bottom: 12px;
+}
+
+.brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--color-success);
+}
+
+.project-path {
+  margin-top: 6px;
+  color: var(--color-muted);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: grid;
+  gap: 8px;
+}
+
+button {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 6px 10px;
+  color: var(--color-accent-fg);
+  background: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+button:hover {
+  background: var(--color-hover);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 1px;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+button.secondary {
+  color: var(--color-fg);
+  background: transparent;
+  border-color: var(--color-border);
+}
+
+button.secondary:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.action-status {
+  min-height: 20px;
+  margin-top: 8px;
+  color: var(--color-muted);
+}
+
+.action-status:empty {
+  display: none;
+}
+
+.action-status.busy {
+  color: var(--vscode-progressBar-background);
+}
+
+.action-status.success {
+  color: var(--color-success);
+}
+
+.action-status.error {
+  color: var(--color-error);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:active {
+    transform: none;
+  }
+}

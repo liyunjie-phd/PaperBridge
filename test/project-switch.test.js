@@ -118,3 +118,40 @@ test("failed Overleaf setup still stores a newly entered token", async () => {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("setup opens a new project without AI, Overleaf, or Git credentials", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-no-credentials-"));
+  try {
+    const server = await startServer({
+      port: 0,
+      dataRoot: path.join(root, "data"),
+      projectsRoot: path.join(root, "projects")
+    });
+    const response = await fetch(`${server.url}/api/setup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: { mode: "new", name: "Credential Free Paper" } })
+    });
+    assert.equal(response.ok, true);
+    const project = await response.json();
+    assert.equal(project.config.mainTex, "main.tex");
+    assert.equal(project.config.translation.hasApiKey, false);
+    assert.equal(project.config.format.hasApiKey, false);
+    assert.equal(project.git.available, false);
+    assert.match(await fs.readFile(path.join(project.config.projectRoot, "main.tex"), "utf8"), /\\begin\{document\}/);
+  } finally {
+    await stopServer();
+    const relative = path.relative(os.tmpdir(), root);
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("initial setup UI defaults to a new project and marks AI configuration optional", async () => {
+  const html = await fs.readFile(path.join(process.cwd(), "public", "index.html"), "utf8");
+  const app = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  assert.match(html, /name="setupSource" value="new" checked/);
+  assert.match(html, /配置 AI（可选）/);
+  assert.doesNotMatch(html, /id="setupStorageRoot"[^>]*required/);
+  assert.match(app, /AI 和远端连接可以稍后配置/);
+});

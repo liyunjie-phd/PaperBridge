@@ -5,22 +5,30 @@ import path from "node:path";
 import test from "node:test";
 import { startServer, stopServer } from "../server.js";
 
-test("reference workbench stays beside the bilingual editor and supports citation drag-and-drop", async () => {
+test("reference workbench preserves the current left editor and supports citation drag-and-drop", async () => {
   const appSource = await fs.readFile(new URL("../public/app.js", import.meta.url), "utf8");
   const styles = await fs.readFile(new URL("../public/styles.css", import.meta.url), "utf8");
   const html = await fs.readFile(new URL("../public/index.html", import.meta.url), "utf8");
 
-  assert.match(appSource, /const referencesOpen = mode === "references"/);
-  assert.match(appSource, /elements\.editView\.classList\.toggle\("hidden", mode !== "edit" && !referencesOpen\)/);
-  assert.match(appSource, /elements\.previewPanel\.classList\.toggle\("hidden", referencesOpen\)/);
+  assert.match(html, /data-mode="source"[^>]*aria-pressed="true">TeX<\/button>[\s\S]*data-mode="edit"[^>]*>翻译<\/button>[\s\S]*data-mode="references"[^>]*>文献<\/button>[\s\S]*data-mode="format"[^>]*>格式<\/button>/);
+  assert.match(html, /class="editor-panel hidden" id="editView"/);
+  assert.match(html, /class="editor-panel source-panel" id="sourceView"/);
+  assert.match(appSource, /mode:\s*"source",\s*referencesOpen:\s*false/);
+  assert.match(appSource, /if \(mode === "references"\) return setReferencesOpen\(!state\.referencesOpen\)/);
+  assert.match(appSource, /function setReferencesOpen\(open\)[\s\S]*state\.referencesOpen = Boolean\(open\)/);
+  assert.doesNotMatch(appSource, /function setReferencesOpen\(open\)[\s\S]{0,500}state\.mode\s*=/);
+  assert.match(appSource, /elements\.editView\.classList\.toggle\("hidden", mode !== "edit"\)/);
+  assert.match(appSource, /elements\.previewPanel\.classList\.toggle\("hidden", state\.referencesOpen\)/);
   assert.match(html, /id="closeReferencesButton"[^>]*aria-label="关闭参考文献，返回 PDF"/);
   assert.match(html, /id="addReferenceButton"[^>]*>\s*<i data-lucide="plus"><\/i><span>新增文献<\/span>/);
   assert.match(html, /id="referenceAddDialog"/);
-  assert.match(html, /id="referenceAddUrl"/);
+  assert.match(html, /id="referenceAddUrl"[^>]*type="text"/);
+  assert.match(html, /id="referenceAddForm"[^>]*novalidate/);
   assert.match(html, /id="referenceAddBib"/);
   assert.match(appSource, /api\("\/api\/references\/lookup"/);
   assert.match(appSource, /api\("\/api\/references\/add"/);
-  assert.match(appSource, /elements\.closeReferencesButton\.addEventListener\("click", \(\) => setMode\("edit", \{ loadCurrent: false \}\)\)/);
+  assert.match(appSource, /elements\.referenceAddForm\.noValidate\s*=\s*true/);
+  assert.match(appSource, /elements\.closeReferencesButton\.addEventListener\("click", \(\) => setReferencesOpen\(false\)\)/);
   assert.match(appSource, /row\.draggable = true/);
   assert.match(appSource, /event\.dataTransfer\.setData\(CITATION_DRAG_TYPE, entry\.key\)/);
   assert.match(appSource, /event\.dataTransfer\.setData\("text\/plain", `\\\\cite\{\$\{entry\.key\}\}`\)/);

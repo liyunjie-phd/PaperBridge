@@ -1,4 +1,4 @@
-PaperBridge 0.3.1 Windows 完整版使用说明
+PaperBridge 0.4.2 Windows 完整版使用说明
 ====================================
 
 一、版本说明
@@ -18,7 +18,7 @@ PaperBridge 0.3.1 Windows 完整版使用说明
 当前版本没有购买商业代码签名证书。
 Windows 第一次运行时可能显示“Windows 已保护你的电脑”。
 
-确认文件来自发送者并完成 SHA-256 校验后，可以：
+确认文件来自发送者后，可以：
 
 1. 点击“更多信息”。
 2. 确认应用名称为 PaperBridge。
@@ -77,19 +77,9 @@ TeX / Bib 源码也会按项目串行、原子保存，每个源码文件最多�
 
 格式迁移和 AI 修改前请保留 Overleaf 或论文文件夹的独立备份。
 
-五、校验下载文件
+五、安装与启动
 
-同一目录中的 SHA256.txt 记录了安装程序的校验值。
-
-简单方法：
-
-1. 在当前文件夹空白处按住 Shift 并单击鼠标右键。
-2. 选择“在此处打开 PowerShell 窗口”或“在终端中打开”。
-3. 输入：
-
-   Get-FileHash .\PaperBridge-Setup.exe -Algorithm SHA256
-
-4. 将显示的 Hash 与 SHA256.txt 对照，必须完全一致。
+双击 PaperBridge-Setup.exe 即可开始安装。
 
 六、卸载和清理
 

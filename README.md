@@ -26,7 +26,7 @@ Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.2 Windows 安�
 
 安装时可以选择程序安装目录。首次启动时还可以单独选择数据目录，用于保存设置、中文工作稿、源码备份和导入的论文项目，数据目录之后也可以在设置中迁移到其他磁盘。
 
-当前版本没有商业代码签名证书。Windows 首次运行时可能显示“Windows 已保护你的电脑”。确认安装包来源和 SHA-256 后，可以选择 **更多信息 > 仍要运行**。
+当前版本没有商业代码签名证书。Windows 首次运行时可能显示“Windows 已保护你的电脑”。确认安装包来源后，可以选择 **更多信息 > 仍要运行**。
 
 可以从 Windows 的 **设置 > 应用 > 已安装的应用** 中卸载 PaperBridge。卸载时可以选择保留数据，也可以删除 PaperBridge 数据目录中的项目、工作稿、备份、设置和缓存。
 
@@ -207,7 +207,7 @@ flowchart LR
 
 ### Windows 阻止安装程序
 
-当前安装包没有商业代码签名证书。请先确认下载来源和 SHA-256，再通过 **更多信息 > 仍要运行** 继续。学校或公司电脑可能通过安全策略禁止未签名软件，应遵守所在单位的规定。
+当前安装包没有商业代码签名证书。请先确认下载来源，再通过 **更多信息 > 仍要运行** 继续。学校或公司电脑可能通过安全策略禁止未签名软件，应遵守所在单位的规定。
 
 ### `AI provider returned 401: Authentication Fails`
 
@@ -226,3 +226,29 @@ npm run desktop
 ```powershell
 npm run build:setup
 ```
+
+## macOS 版本
+
+PaperBridge 也提供 macOS 构建版本，支持 Intel (`x64`) 和 Apple Silicon (`arm64`)。Mac 版本使用 `.dmg` 安装包，并在构建时随包附带对应架构的 Tectonic，不需要另外安装 Node.js 或 Git。
+
+### 从 GitHub Actions 构建
+
+在 GitHub 仓库的 **Actions > Build PaperBridge for macOS > Run workflow** 中手动启动构建。完成后，在对应的 workflow run 页面下载 `PaperBridge-mac-x64` 或 `PaperBridge-mac-arm64` artifact，其中包含 DMG 和 ZIP。
+
+也可以推送一个 `v*` 格式的 tag 自动触发构建。当前构建未配置 Apple Developer 签名和公证；首次打开时如果 macOS 提示无法验证开发者，请在 Finder 中右键应用选择“打开”，或在“系统设置 > 隐私与安全性”中允许打开。
+
+### 在 Mac 上本地构建
+
+需要 macOS、Node.js 22、Homebrew 和 Xcode Command Line Tools：
+
+```bash
+npm ci
+brew install tectonic
+ARCH="$(node -p 'process.arch')"
+mkdir -p "resources/bin/darwin-$ARCH"
+cp "$(brew --prefix tectonic)/bin/tectonic" "resources/bin/darwin-$ARCH/tectonic"
+chmod +x "resources/bin/darwin-$ARCH/tectonic"
+if [ "$ARCH" = "arm64" ]; then npm run build:mac:arm64; else npm run build:mac:x64; fi
+```
+
+生成的文件位于 `release/macos/`；Windows 构建产物位于 `release/windows/`。如果 Mac 已经安装 TeX Live 或 MiKTeX，也可以不放入 Tectonic，PaperBridge 会优先使用系统的 `latexmk`。

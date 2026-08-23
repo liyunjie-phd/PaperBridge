@@ -129,7 +129,11 @@ test("desktop UI exposes project undo and saves before exiting", async () => {
   assert.match(html, /id="undoButton"/);
   assert.match(appJs, /elements\.undoButton\.addEventListener\("click"/);
   assert.match(appJs, /event\.key\.toLowerCase\(\) !== "z"/);
-  assert.match(appJs, /textarea, input, select, \[contenteditable='true'\]/);
+  assert.match(appJs, /function shouldUseNativeTextUndo\(target\)/);
+  assert.match(appJs, /if \(shouldUseNativeTextUndo\(target\)\) return;/);
+  assert.match(appJs, /editable === elements\.sourceEditor\) return state\.sourceDirty/);
+  assert.match(appJs, /\.segment-textarea, \.math-source-editor/);
+  assert.match(appJs, /Ctrl\+Z/);
   assert.match(appJs, /window\.paperBridgeDesktop\?\.onCloseRequest\?\.\(handleDesktopCloseRequest\)/);
   assert.match(appJs, /api\("\/api\/undo\/commit"/);
   assert.match(preload, /paperbridge:close-request/);

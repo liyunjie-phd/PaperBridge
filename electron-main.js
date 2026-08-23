@@ -54,6 +54,24 @@ function decryptSecret(value) {
   }
 }
 
+function findBundledTectonic() {
+  const resourceRoot = app.isPackaged
+    ? path.join(process.resourcesPath, "bin")
+    : path.join(appRoot, "resources", "bin");
+  const candidates = process.platform === "win32"
+    ? ["tectonic.exe"]
+    : [
+        `${process.platform}-${process.arch}/tectonic`,
+        `tectonic-${process.platform}-${process.arch}`,
+        "tectonic"
+      ];
+  for (const relativePath of candidates) {
+    const candidate = path.join(resourceRoot, relativePath);
+    if (fsSync.existsSync(candidate)) return candidate;
+  }
+  return "";
+}
+
 function requestRendererClose(save, timeoutMs = 75_000) {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return Promise.resolve({ ok: true, dirty: false, undoCount: 0 });
@@ -241,9 +259,7 @@ app.whenReady().then(async () => {
   const portableRoot = process.env.PORTABLE_EXECUTABLE_DIR
     ? path.join(process.env.PORTABLE_EXECUTABLE_DIR, "PaperBridge-Data")
     : "";
-  const tectonicPath = app.isPackaged
-    ? path.join(process.resourcesPath, "bin", "tectonic.exe")
-    : path.join(appRoot, "resources", "bin", "tectonic.exe");
+  const tectonicPath = findBundledTectonic();
   const server = await startServer({
     port: 0,
     storageRoot: portableRoot || storedStorageRoot,
@@ -270,7 +286,9 @@ app.on("activate", () => {
   if (!mainWindow && appUrl) createWindow();
 });
 
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
 app.on("before-quit", () => {
   stopServer().catch(() => {});
 });

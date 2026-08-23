@@ -59,7 +59,7 @@ const tablePaper = [
   "\\end{document}"
 ].join("\n");
 
-test("table blocks are exposed as editable bilingual grids and save English cells back to TeX", async () => {
+test("table blocks expose one English grid and save edited cells back to TeX", async () => {
   await withProject("paperbridge-041-table-", tablePaper, async ({ projectRoot, request }) => {
     let document = await request("/api/document?file=main.tex");
     assert.equal(document.tableBlocks.length, 1);
@@ -78,14 +78,63 @@ test("table blocks are exposed as editable bilingual grids and save English cell
       id: table.id,
       sourceHash: table.sourceHash,
       startLine: table.startLine,
-      chineseRows: [["指标", "值"], ["时延", "1 秒"]],
       englishRows: [["Metric", "Value"], ["Latency", "1 s"]],
       deferCompile: true
     });
     document = result.document;
-    assert.deepEqual(document.tableBlocks[0].chineseRows, [["指标", "值"], ["时延", "1 秒"]]);
+    assert.deepEqual(document.tableBlocks[0].chineseRows, [["Metric", "Value"], ["Latency", "1 s"]]);
     const content = await fs.readFile(path.join(projectRoot, "main.tex"), "utf8");
     assert.match(content, /Latency & 1 s \\\\/);
+  });
+});
+
+test("table editing can add or remove rows and columns while keeping TeX structure", async () => {
+  await withProject("paperbridge-041-table-shape-", tablePaper, async ({ projectRoot, request }) => {
+    const document = await request("/api/document?file=main.tex");
+    const table = document.tableBlocks[0];
+    const result = await request("/api/table-block", {
+      file: "main.tex",
+      id: table.id,
+      sourceHash: table.sourceHash,
+      startLine: table.startLine,
+      englishRows: [
+        ["Metric", "Value", "Unit"],
+        ["Delay", "1 s", "seconds"],
+        ["Energy", "2 J", "joules"]
+      ],
+      deferCompile: true
+    });
+    const content = await fs.readFile(path.join(projectRoot, "main.tex"), "utf8");
+    assert.match(content, /\\begin\{tabular\}\{lll\}/);
+    assert.match(content, /Metric & Value & Unit \\\\/);
+    assert.match(content, /Energy & 2 J & joules \\\\/);
+    assert.equal(result.document.tableBlocks[0].rows.length, 3);
+    assert.equal(result.document.tableBlocks[0].rows[0].cells.length, 3);
+  });
+});
+
+test("table editing preserves wrapped LaTeX column specifications when resizing", async () => {
+  const paper = [
+    "\\documentclass{article}",
+    "\\begin{document}",
+    "\\begin{tabular}{@{}p{2cm}l@{}}",
+    "Name & Value \\\\",
+    "\\end{tabular}",
+    "\\end{document}"
+  ].join("\n");
+  await withProject("paperbridge-041-table-spec-", paper, async ({ projectRoot, request }) => {
+    const document = await request("/api/document?file=main.tex");
+    const table = document.tableBlocks[0];
+    await request("/api/table-block", {
+      file: "main.tex",
+      id: table.id,
+      sourceHash: table.sourceHash,
+      startLine: table.startLine,
+      englishRows: [["Name", "Value", "Extra"]],
+      deferCompile: true
+    });
+    const content = await fs.readFile(path.join(projectRoot, "main.tex"), "utf8");
+    assert.match(content, /\\begin\{tabular\}\{@\{\}p\{2cm\}ll@\{\}\}/);
   });
 });
 
@@ -97,6 +146,32 @@ test("creating a TeX source file lists and opens the new file even before it is 
     assert.equal(await fs.readFile(path.join(projectRoot, "sections", "new-section.tex"), "utf8"), "");
     const source = await request("/api/source?file=sections%2Fnew-section.tex");
     assert.equal(source.file, "sections/new-section.tex");
+  });
+});
+
+test("creating a TeX source file can insert it at the end of a selected section in main.tex", async () => {
+  const sectionPaper = [
+    "\\documentclass{article}",
+    "\\begin{document}",
+    "\\section{Evaluation}",
+    "Existing evaluation text remains in the main document.",
+    "\\end{document}"
+  ].join("\n");
+  await withProject("paperbridge-041-create-insert-", sectionPaper, async ({ projectRoot, request }) => {
+    const main = await request("/api/source?file=main.tex");
+    const result = await request("/api/source/create", {
+      file: "sections/evaluation.tex",
+      insertion: { mode: "after-section", line: 3, sourceHash: main.sourceHash }
+    });
+    assert.deepEqual(result.insertion, {
+      mode: "after-section",
+      mainTex: "main.tex",
+      command: "\\input{sections/evaluation}"
+    });
+    const updatedMain = await fs.readFile(path.join(projectRoot, "main.tex"), "utf8");
+    assert.match(updatedMain, /Existing evaluation text remains in the main document\.\n\\input\{sections\/evaluation\}\n\\end\{document\}/);
+    assert.equal(await fs.readFile(path.join(projectRoot, "sections", "evaluation.tex"), "utf8"), "");
+    assert.ok(result.project.sourceFiles.includes("sections/evaluation.tex"));
   });
 });
 

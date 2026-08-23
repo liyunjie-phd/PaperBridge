@@ -8,6 +8,7 @@ import {
   deleteSegment,
   discoverTexFiles,
   findMissingProtectedTokens,
+  parseMathBlocks,
   insertSegment,
   parseSegments,
   readDocument,
@@ -145,6 +146,40 @@ test("parseSegments excludes standalone macro and bibliography files", () => {
   assert.equal(parseSegments(macros, "macros.tex").segments.length, 0);
   assert.equal(parseSegments(references, "references.tex").segments.length, 0);
   assert.equal(parseSegments(body, "introduction.tex").segments.length, 1);
+});
+
+test("parseSegments ignores prose and math markers after LaTeX comments", () => {
+  const source = [
+    "\\begin{document}",
+    "Visible prose contains enough academic words for the editor.",
+    "\\begin{equation} % visible formula begins",
+    "x = y",
+    "\\end{equation} % visible formula ends",
+    "Another visible paragraph contains enough academic words after math.",
+    "\\end{document}"
+  ].join("\n");
+  const parsed = parseSegments(source, "main.tex");
+  assert.equal(parsed.segments.length, 2);
+  assert.doesNotMatch(parsed.segments.map((segment) => segment.english).join("\n"), /commented formula/);
+});
+
+test("parseMathBlocks ignores full-line and trailing LaTeX comments", () => {
+  const source = [
+    "\\begin{document}",
+    "% \\begin{equation}",
+    "% E = mc^2",
+    "% \\end{equation}",
+    "Visible prose before a commented marker. % $$ not a formula",
+    "\\begin{equation} % start the visible formula",
+    "x = y",
+    "\\end{equation} % close the visible formula",
+    "\\end{document}"
+  ].join("\n");
+
+  const blocks = parseMathBlocks(source, "main.tex");
+  assert.equal(blocks.length, 1);
+  assert.match(blocks[0].source, /x = y/);
+  assert.equal(blocks[0].endLine, 8);
 });
 
 test("protected LaTeX tokens are detected", () => {
