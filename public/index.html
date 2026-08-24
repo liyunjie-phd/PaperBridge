@@ -38,6 +38,9 @@
       <button class="button primary" id="pushButton" title="编译、提交并推送至远端 Git 仓库">
         <i data-lucide="upload"></i><span>推送</span>
       </button>
+      <button class="button secondary hidden" id="webLogoutButton" type="button" title="退出当前测试账号">
+        <i data-lucide="log-out"></i><span>退出</span>
+      </button>
       <button class="icon-button" id="settingsButton" title="设置">
         <i data-lucide="settings"></i>
       </button>
@@ -399,6 +402,11 @@
               <input id="setupZipPath" type="text" autocomplete="off" readonly>
               <button class="icon-button" id="chooseZipButton" type="button" title="选择 ZIP"><i data-lucide="folder-open"></i></button>
             </div>
+          </label>
+          <label class="field wide">
+            <span>网页版上传 ZIP</span>
+            <input id="setupZipFile" type="file" accept=".zip,application/zip">
+            <small class="field-note">网页版请选择文件上传；桌面版仍可使用上面的本地路径选择。</small>
           </label>
         </div>
 

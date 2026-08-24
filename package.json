@@ -9,6 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "web": "node web-gateway.mjs",
+    "web:user": "node web-users.mjs",
     "desktop": "electron .",
     "test": "node --test",
     "build:dir": "electron-builder --dir --win --x64",
