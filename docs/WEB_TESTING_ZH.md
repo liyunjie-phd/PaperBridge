@@ -2,6 +2,12 @@
 
 这套方式面向约 10 名受邀请用户。PaperBridge 仍运行在你的 Windows 主机上，外部用户通过 HTTPS 隧道访问。每个用户使用独立的设置目录、项目目录、中文工作稿、凭据和编译进程。
 
+下面的命令必须在 PaperBridge 源码目录（能看到 `package.json`、`server.js` 和 `web-gateway.mjs` 的目录）中执行，而不是在 `C:\Users\你的用户名` 主目录中执行：
+
+```powershell
+Set-Location "E:\25INFOCOM-CEDAR\ACM\paper-bridge"
+```
+
 ## 数据隔离结构
 
 默认数据保存在项目旁边的 `web-data`，也可以使用 `PAPERBRIDGE_WEB_DATA_ROOT` 指向其他磁盘：
