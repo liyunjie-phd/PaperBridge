@@ -3,8 +3,9 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { readWebUsers, verifyPassword } from "./web-users.mjs";
+import { readWebUsers, registerWebUser, verifyPassword } from "./web-users.mjs";
 
 const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -23,6 +24,12 @@ function cookie(name, value, options = {}) {
   if (options.secure) attributes.push("Secure");
   if (options.maxAge !== undefined) attributes.push(`Max-Age=${options.maxAge}`);
   return attributes.join("; ");
+}
+
+function safeTextEqual(left, right) {
+  const a = Buffer.from(String(left || ""));
+  const b = Buffer.from(String(right || ""));
+  return a.length > 0 && a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 function userRoots(dataRoot, user) {
@@ -71,11 +78,12 @@ const LOGIN_PAGE = `<!doctype html>
 <title>PaperBridge 登录</title><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef4f1;font:16px system-ui,"Microsoft YaHei",sans-serif;color:#173a31}
 main{width:min(380px,calc(100vw - 40px));padding:32px;background:#fff;border:1px solid #d7e5df;border-radius:18px;box-shadow:0 12px 36px #174f3b18}h1{margin:0 0 8px;font-size:25px}p{color:#60786f;font-size:14px;line-height:1.6}label{display:block;margin:18px 0 6px;font-size:14px;font-weight:600}input{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #c8d9d2;border-radius:9px;font-size:16px}button{width:100%;margin-top:22px;padding:12px;border:0;border-radius:9px;background:#176b52;color:#fff;font-size:16px;cursor:pointer}#message{min-height:22px;margin-top:14px;color:#b33b36;font-size:14px}</style></head>
-<body><main><h1>PaperBridge</h1><p>请输入测试账号登录。每个账号拥有独立的论文项目、配置和编译空间。</p>
-<form id="login"><label for="username">用户名</label><input id="username" autocomplete="username" required>
+<body><main><h1>PaperBridge</h1><p>请输入邮箱和密码登录。首次使用需要填写管理员提供的邀请码；每个账号拥有独立的论文项目、配置和编译空间。</p>
+<form id="login"><label for="email">邮箱</label><input id="email" type="email" autocomplete="username" required>
 <label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required>
-<button>登录</button><div id="message" role="alert"></div></form></main>
-<script>document.querySelector('#login').addEventListener('submit',async(e)=>{e.preventDefault();const m=document.querySelector('#message');m.textContent='登录中…';try{const r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:document.querySelector('#username').value,password:document.querySelector('#password').value})});const p=await r.json();if(!r.ok)throw new Error(p.error||'登录失败');location.href='/';}catch(err){m.textContent=err.message;}});</script></body></html>`;
+<label for="inviteCode">邀请码（首次注册必填）</label><input id="inviteCode" autocomplete="one-time-code" placeholder="已有账号可留空">
+<button>登录 / 注册</button><div id="message" role="alert"></div></form></main>
+<script>document.querySelector('#login').addEventListener('submit',async(e)=>{e.preventDefault();const m=document.querySelector('#message');m.textContent='登录中…';try{const r=await fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:document.querySelector('#email').value,password:document.querySelector('#password').value,inviteCode:document.querySelector('#inviteCode').value})});const p=await r.json();if(!r.ok)throw new Error(p.error||'登录失败');location.href='/';}catch(err){m.textContent=err.message;}});</script></body></html>`;
 
 function waitForPort(port, timeoutMs = 15_000) {
   const started = Date.now();
@@ -100,6 +108,8 @@ export function createWebGateway(options = {}) {
   const port = Number(options.port ?? process.env.PAPERBRIDGE_WEB_PORT ?? 8080);
   const backendBasePort = Number(options.backendBasePort || process.env.PAPERBRIDGE_WEB_BACKEND_BASE_PORT || 4700);
   const cookieSecure = options.cookieSecure ?? process.env.PAPERBRIDGE_WEB_COOKIE_SECURE === "1";
+  const inviteCode = String(options.inviteCode ?? process.env.PAPERBRIDGE_WEB_INVITE_CODE ?? "").trim();
+  const maxUsers = Math.max(1, Number(options.maxUsers ?? process.env.PAPERBRIDGE_WEB_MAX_USERS ?? 10));
   const sessionTtlMs = Number(options.sessionTtlMs || 24 * 60 * 60 * 1000);
   const sessions = new Map();
   const backends = new Map();
@@ -120,8 +130,9 @@ export function createWebGateway(options = {}) {
   }
 
   async function findUser(username) {
-    const users = await readWebUsers(usersFile);
-    return users.find((user) => String(user.username || "").toLowerCase() === String(username || "").trim().toLowerCase()) || null;
+    const normalized = String(username || "").trim().toLowerCase();
+    const users = await readWebUsers(usersFile, { allowMissing: true });
+    return users.find((user) => String(user.email || user.username || "").toLowerCase() === normalized) || null;
   }
 
   async function ensureBackend(user) {
@@ -189,25 +200,38 @@ export function createWebGateway(options = {}) {
     if (parsed.pathname === "/login" && request.method === "GET") return html(response, 200, LOGIN_PAGE);
     if (parsed.pathname === "/auth/login" && request.method === "POST") {
       const body = JSON.parse((await readRequestBody(request)).toString("utf8") || "{}");
-      const attemptKey = `${request.socket.remoteAddress || "unknown"}:${String(body.username || "").trim().toLowerCase()}`;
+      const email = String(body.email || "").trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return json(response, 400, { error: "请输入有效的邮箱地址。" });
+      }
+      const attemptKey = `${request.socket.remoteAddress || "unknown"}:${email}`;
       const attempt = loginAttempts.get(attemptKey);
       if (attempt && attempt.count >= 5 && Date.now() - attempt.startedAt < 10 * 60 * 1000) {
         return json(response, 429, { error: "登录失败次数过多，请 10 分钟后重试。" }, { "Retry-After": "600" });
       }
-      const user = await findUser(body.username);
-      if (!user || !(await verifyPassword(body.password, user.passwordHash))) {
+      let user = await findUser(email);
+      if (!user && (!inviteCode || !safeTextEqual(body.inviteCode, inviteCode))) {
+        return json(response, 403, { error: "首次注册需要有效的邀请码。" });
+      }
+      if (!user) {
+        try {
+          user = await registerWebUser({ email, password: body.password }, usersFile, maxUsers);
+        } catch (error) {
+          return json(response, 400, { error: error.message });
+        }
+      } else if (!(await verifyPassword(body.password, user.passwordHash))) {
         const current = attempt && Date.now() - attempt.startedAt < 10 * 60 * 1000
           ? attempt
           : { count: 0, startedAt: Date.now() };
         current.count += 1;
         loginAttempts.set(attemptKey, current);
-        return json(response, 401, { error: "用户名或密码错误。" });
+        return json(response, 401, { error: "邮箱或密码错误。" });
       }
       loginAttempts.delete(attemptKey);
       const token = crypto.randomBytes(32).toString("base64url");
       const csrf = crypto.randomBytes(24).toString("base64url");
       sessions.set(token, { user, csrf, expiresAt: Date.now() + sessionTtlMs });
-      return json(response, 200, { ok: true, username: user.username }, {
+      return json(response, 200, { ok: true, username: user.email || user.username }, {
         "Set-Cookie": [cookie("pb_session", token, { httpOnly: true, secure: cookieSecure }), cookie("pb_csrf", csrf, { secure: cookieSecure })]
       });
     }
@@ -235,7 +259,6 @@ export function createWebGateway(options = {}) {
       const uploads = backend.roots.uploads;
       const filePath = path.join(uploads, `${crypto.randomUUID()}.zip`);
       const body = await readRequestBody(request, 100 * 1024 * 1024);
-      const fs = await import("node:fs/promises");
       await fs.mkdir(uploads, { recursive: true });
       await fs.writeFile(filePath, body, { flag: "wx" });
       return json(response, 200, { ok: true, name, path: filePath });
@@ -246,7 +269,7 @@ export function createWebGateway(options = {}) {
   return {
     async start() {
       if (server) return { server, port: listeningPort, url: `http://${host}:${listeningPort}` };
-      await readWebUsers(usersFile);
+      if (!inviteCode) await readWebUsers(usersFile);
       server = http.createServer((request, response) => {
         handle(request, response).catch((error) => json(response, error.statusCode || 500, { error: error.message || "请求失败" }));
       });

@@ -14,7 +14,7 @@ function usersFile() {
 }
 
 function normalizeUsername(value) {
-  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 64);
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9._@+-]/g, "").slice(0, 254);
 }
 
 function userIdForUsername(username) {
@@ -60,17 +60,39 @@ export async function verifyPassword(password, encoded) {
   return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
 }
 
-export async function readWebUsers(file = usersFile()) {
+export async function readWebUsers(file = usersFile(), { allowMissing = false } = {}) {
   try {
     const parsed = JSON.parse(await fs.readFile(file, "utf8"));
     if (!Array.isArray(parsed)) throw new Error("用户文件必须是数组。");
     return parsed.filter((item) => item && item.enabled !== false && normalizeUsername(item.username));
   } catch (error) {
     if (error.code === "ENOENT") {
+      if (allowMissing) return [];
       throw new Error(`找不到网页版用户文件：${file}。请先运行 npm run web:user -- add <用户名>。`);
     }
     throw error;
   }
+}
+
+export async function registerWebUser({ email, password }, file = usersFile(), maxUsers = 10) {
+  const username = normalizeUsername(email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)) throw new Error("请输入有效的邮箱地址。");
+  const users = await readWebUsers(file, { allowMissing: true });
+  const existing = users.find((user) => normalizeUsername(user.email || user.username) === username);
+  if (existing) return existing;
+  if (users.length >= maxUsers) throw new Error("测试账号数量已达到上限，请联系管理员。");
+  const now = new Date().toISOString();
+  const user = {
+    id: userIdForUsername(username),
+    username,
+    email: username,
+    passwordHash: await hashPassword(password),
+    enabled: true,
+    createdAt: now,
+    updatedAt: now
+  };
+  await writeWebUsers([...users, user], file);
+  return user;
 }
 
 async function writeWebUsers(users, file = usersFile()) {
@@ -105,7 +127,7 @@ async function main() {
     for (const user of users) console.log(`${user.username}\t${user.enabled === false ? "disabled" : "enabled"}`);
     return;
   }
-  if (!username) throw new Error("请提供用户名（仅支持字母、数字、点、下划线和短横线）。");
+  if (!username) throw new Error("请提供邮箱地址。");
   if (command === "remove") {
     await writeWebUsers(users.filter((user) => normalizeUsername(user.username) !== username), file);
     console.log(`Removed ${username}`);

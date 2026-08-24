@@ -30,7 +30,7 @@ test("web gateway requires login and accepts a valid session", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-web-auth-"));
   const usersFile = path.join(root, "users.json");
   const passwordHash = await hashPassword("paperbridge-test-password");
-  await fs.writeFile(usersFile, JSON.stringify([{ id: "alice", username: "alice", passwordHash }]));
+  await fs.writeFile(usersFile, JSON.stringify([{ id: "alice", username: "alice@example.com", email: "alice@example.com", passwordHash }]));
   const gateway = createWebGateway({ dataRoot: root, usersFile, port: 0 });
   const running = await gateway.start();
   try {
@@ -40,7 +40,7 @@ test("web gateway requires login and accepts a valid session", async () => {
     const login = await fetch(`http://127.0.0.1:${running.port}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username: "alice", password: "paperbridge-test-password" })
+      body: JSON.stringify({ email: "alice@example.com", password: "paperbridge-test-password" })
     });
     assert.equal(login.status, 200);
     const cookies = login.headers.getSetCookie();
@@ -48,7 +48,7 @@ test("web gateway requires login and accepts a valid session", async () => {
     const cookieHeader = cookies.map((value) => value.split(";", 1)[0]).join("; ");
     const session = await fetch(`http://127.0.0.1:${running.port}/api/web/session`, { headers: { Cookie: cookieHeader } });
     assert.equal(session.status, 200);
-    assert.deepEqual(await session.json(), { authenticated: true, username: "alice", userId: "alice" });
+    assert.deepEqual(await session.json(), { authenticated: true, username: "alice@example.com", userId: "alice" });
     const csrfFailure = await fetch(`http://127.0.0.1:${running.port}/api/config`, { method: "POST", headers: { Cookie: cookieHeader, "Content-Type": "application/json" }, body: "{}" });
     assert.equal(csrfFailure.status, 403);
   } finally {
@@ -57,3 +57,28 @@ test("web gateway requires login and accepts a valid session", async () => {
   }
 });
 
+test("web gateway registers a new email only with the invite code", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-web-invite-"));
+  const usersFile = path.join(root, "users.json");
+  const gateway = createWebGateway({ dataRoot: root, usersFile, port: 0, inviteCode: "invite-for-test" });
+  const running = await gateway.start();
+  try {
+    const rejected = await fetch(`http://127.0.0.1:${running.port}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "new@example.com", password: "paperbridge-test-password", inviteCode: "wrong" })
+    });
+    assert.equal(rejected.status, 403);
+    const registered = await fetch(`http://127.0.0.1:${running.port}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "new@example.com", password: "paperbridge-test-password", inviteCode: "invite-for-test" })
+    });
+    assert.equal(registered.status, 200);
+    const users = JSON.parse(await fs.readFile(usersFile, "utf8"));
+    assert.equal(users[0].email, "new@example.com");
+  } finally {
+    await gateway.stop();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

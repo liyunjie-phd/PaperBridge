@@ -25,7 +25,16 @@ web-data/
 
 ## 1. 建立测试账号
 
-在 PowerShell 中为每位测试用户建立一个账号。密码至少 10 个字符：
+推荐使用“公开链接 + 邀请码”模式。所有人都可以打开同一个链接，但首次注册必须填写管理员提供的邀请码；注册成功后每个邮箱拥有独立的项目空间。启动网关前设置：
+
+```powershell
+$env:PAPERBRIDGE_WEB_INVITE_CODE="只发给测试用户的邀请码"
+$env:PAPERBRIDGE_WEB_MAX_USERS="10"
+```
+
+用户在网页中填写邮箱、密码和邀请码即可注册。密码至少 10 个字符，之后使用邮箱和密码登录，邀请码可以留空。
+
+如果需要由管理员预先建立账号，也可以在 PowerShell 中执行：
 
 ```powershell
 $env:PAPERBRIDGE_WEB_DATA_ROOT="E:\PaperBridge-Web-Data"
@@ -50,6 +59,7 @@ npm.cmd run web:user -- remove alice
 
 ```powershell
 $env:PAPERBRIDGE_WEB_COOKIE_SECURE="1"
+$env:PAPERBRIDGE_WEB_INVITE_CODE="只发给测试用户的邀请码"
 $env:PAPERBRIDGE_WEB_HOST="127.0.0.1"
 $env:PAPERBRIDGE_WEB_PORT="8080"
 $env:PAPERBRIDGE_WEB_DATA_ROOT="E:\PaperBridge-Web-Data"
