@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 import { readWebUsers, registerWebUser, verifyPassword } from "./web-users.mjs";
 
 const APP_ROOT = path.dirname(fileURLToPath(import.meta.url));
+const PRODUCT_VERSIONS = await fs.readFile(path.join(APP_ROOT, "product-versions.json"), "utf8")
+  .then((content) => JSON.parse(content))
+  .catch(() => ({ web: { version: "0.1.0" } }));
+const WEB_VERSION = String(PRODUCT_VERSIONS.web?.version || "0.1.0");
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
 function parseCookies(header = "") {
@@ -75,10 +79,10 @@ function html(res, status, content, headers = {}) {
 
 const LOGIN_PAGE = `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PaperBridge 登录</title><style>
+<title>PaperBridge Web ${WEB_VERSION} 登录</title><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef4f1;font:16px system-ui,"Microsoft YaHei",sans-serif;color:#173a31}
 main{width:min(380px,calc(100vw - 40px));padding:32px;background:#fff;border:1px solid #d7e5df;border-radius:18px;box-shadow:0 12px 36px #174f3b18}h1{margin:0 0 8px;font-size:25px}p{color:#60786f;font-size:14px;line-height:1.6}label{display:block;margin:18px 0 6px;font-size:14px;font-weight:600}input{box-sizing:border-box;width:100%;padding:11px 12px;border:1px solid #c8d9d2;border-radius:9px;font-size:16px}button{width:100%;margin-top:22px;padding:12px;border:0;border-radius:9px;background:#176b52;color:#fff;font-size:16px;cursor:pointer}#message{min-height:22px;margin-top:14px;color:#b33b36;font-size:14px}</style></head>
-<body><main><h1>PaperBridge</h1><p>请输入邮箱和密码登录。首次使用需要填写管理员提供的邀请码；每个账号拥有独立的论文项目、配置和编译空间。</p>
+<body><main><h1>PaperBridge</h1><p>网页版 ${WEB_VERSION} · 请输入邮箱和密码登录。首次使用需要填写管理员提供的邀请码；每个账号拥有独立的论文项目、配置和编译空间。</p>
 <form id="login"><label for="email">邮箱</label><input id="email" type="email" autocomplete="username" required>
 <label for="password">密码</label><input id="password" type="password" autocomplete="current-password" required>
 <label for="inviteCode">邀请码（首次注册必填）</label><input id="inviteCode" autocomplete="one-time-code" placeholder="已有账号可留空">
@@ -195,8 +199,13 @@ export function createWebGateway(options = {}) {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("X-Frame-Options", "DENY");
     response.setHeader("Referrer-Policy", "same-origin");
+    response.setHeader("X-PaperBridge-Product", "web");
+    response.setHeader("X-PaperBridge-Version", WEB_VERSION);
     const parsed = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     if (parsed.pathname === "/healthz") return json(response, 200, { ok: true, users: sessions.size });
+    if (parsed.pathname === "/api/web/version" && request.method === "GET") {
+      return json(response, 200, { product: "web", version: WEB_VERSION });
+    }
     if (parsed.pathname === "/login" && request.method === "GET") return html(response, 200, LOGIN_PAGE);
     if (parsed.pathname === "/auth/login" && request.method === "POST") {
       const body = JSON.parse((await readRequestBody(request)).toString("utf8") || "{}");

@@ -75,6 +75,51 @@ test("a local paper can connect and push to an empty Git repository", async () =
   }
 });
 
+test("a local ZIP-style project can push into a populated remote and update matching files", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-git-populated-remote-"));
+  const seedRoot = path.join(root, "seed");
+  const projectRoot = path.join(root, "paper");
+  const remoteRoot = path.join(root, "remote.git");
+  try {
+    await fs.mkdir(seedRoot);
+    await git(["init", "--bare", remoteRoot], root);
+    await git(["init"], seedRoot);
+    await git(["config", "user.name", "PaperBridge Test"], seedRoot);
+    await git(["config", "user.email", "test@paperbridge.local"], seedRoot);
+    await fs.writeFile(path.join(seedRoot, "main.tex"), "Remote version of the paper.\n", "utf8");
+    await fs.writeFile(path.join(seedRoot, "README.md"), "Remote-only project notes.\n", "utf8");
+    await git(["add", "main.tex", "README.md"], seedRoot);
+    await git(["commit", "-m", "Seed populated remote"], seedRoot);
+    await git(["branch", "-M", "main"], seedRoot);
+    await git(["remote", "add", "origin", remoteRoot], seedRoot);
+    await git(["push", "-u", "origin", "main"], seedRoot);
+    await git(["symbolic-ref", "HEAD", "refs/heads/main"], remoteRoot);
+
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "main.tex"), "Current local version of the paper.\n", "utf8");
+    await fs.writeFile(path.join(projectRoot, "section.tex"), "A new local section.\n", "utf8");
+    configureProjectRuntime({ getGitUsername: () => "", getGitToken: () => "" });
+    await connectGitRepository(projectRoot, remoteRoot);
+
+    const pushed = await pushGitRepository(projectRoot, "Upload local ZIP project", {
+      confirmed: true,
+      files: ["main.tex", "section.tex"]
+    });
+    assert.equal(pushed.pushed, true);
+    assert.match(await git(["show", "main:main.tex"], remoteRoot), /Current local version/);
+    assert.match(await git(["show", "main:section.tex"], remoteRoot), /new local section/);
+    assert.match(await git(["show", "main:README.md"], remoteRoot), /Remote-only project notes/);
+    const status = await getGitStatus(projectRoot);
+    assert.equal(status.dirty, false);
+    assert.equal(status.ahead, 0);
+    assert.equal(status.behind, 0);
+  } finally {
+    const relative = path.relative(os.tmpdir(), root);
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("Overleaf push stages new paper files without requiring a local compile", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-overleaf-push-"));
   const seedRoot = path.join(root, "seed");

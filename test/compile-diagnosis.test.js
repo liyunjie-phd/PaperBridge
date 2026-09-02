@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer, stopServer } from "../server.js";
+import { getDependencyStatus } from "../lib/project.js";
 
 test("compile diagnosis sends targeted source context and caches identical errors", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-compile-diagnosis-"));
@@ -195,6 +196,74 @@ test("compile diagnosis avoids no-op missing-dollar advice for bold math text", 
   } finally {
     await stopServer();
     if (providerServer) await new Promise((resolve) => providerServer.close(resolve));
+    const relative = path.relative(os.tmpdir(), root);
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("manual compile failure persists stale-PDF protection across project refresh", async (t) => {
+  const dependencies = await getDependencyStatus();
+  if (dependencies.compiler === "missing") {
+    t.skip("No LaTeX compiler is available in this environment.");
+    return;
+  }
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-compile-state-"));
+  const projectRoot = path.join(root, "project");
+  try {
+    await fs.mkdir(projectRoot);
+    await fs.writeFile(path.join(projectRoot, "main.tex"), [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "Valid document.",
+      "\\end{document}"
+    ].join("\n"), "utf8");
+    const server = await startServer({
+      port: 0,
+      dataRoot: path.join(root, "data"),
+      projectsRoot: path.join(root, "projects")
+    });
+    const provider = {
+      type: "openai-compatible",
+      baseUrl: "http://127.0.0.1:1",
+      apiKey: "test-key",
+      model: "test-model",
+      jsonMode: true
+    };
+    const json = async (url, options = {}) => {
+      const response = await fetch(`${server.url}${url}`, {
+        headers: { "Content-Type": "application/json" },
+        ...options
+      });
+      return { response, payload: await response.json() };
+    };
+    let result = await json("/api/setup", {
+      method: "POST",
+      body: JSON.stringify({ source: { mode: "local", localPath: projectRoot }, translation: provider, review: provider, autoCompile: false })
+    });
+    assert.equal(result.response.ok, true, result.payload.error);
+    result = await json("/api/compile", { method: "POST", body: "{}" });
+    assert.equal(result.payload.success, true);
+
+    await fs.writeFile(path.join(projectRoot, "main.tex"), [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\undefinedPaperBridgeCommand",
+      "\\end{document}"
+    ].join("\n"), "utf8");
+    result = await json("/api/compile", { method: "POST", body: "{}" });
+    assert.equal(result.response.ok, true);
+    assert.equal(result.payload.success, false);
+    assert.equal(result.payload.previewAvailable, false);
+    assert.ok(result.payload.locations.some((location) => location.file === "main.tex" && location.line === 3));
+
+    const bootstrap = await json("/api/bootstrap");
+    assert.equal(bootstrap.payload.lastBuild.success, false);
+    assert.equal(bootstrap.payload.lastBuild.previewAvailable, false);
+    const stalePdf = await fetch(`${server.url}/api/pdf`);
+    assert.equal(stalePdf.status, 409);
+  } finally {
+    await stopServer();
     const relative = path.relative(os.tmpdir(), root);
     assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
     await fs.rm(root, { recursive: true, force: true });

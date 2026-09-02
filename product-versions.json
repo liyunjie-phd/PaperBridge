@@ -1,0 +1,26 @@
+{
+  "windows": {
+    "version": "0.5.0",
+    "tagPrefix": "windows-v",
+    "artifactDirectory": "release/windows",
+    "description": "Windows 桌面版（主线）"
+  },
+  "macos": {
+    "version": "0.1.0",
+    "tagPrefix": "macos-v",
+    "artifactDirectory": "release/macos",
+    "description": "macOS 桌面版"
+  },
+  "web": {
+    "version": "0.1.0",
+    "tagPrefix": "web-v",
+    "artifactDirectory": null,
+    "description": "网页版测试服务"
+  },
+  "plugin": {
+    "version": "0.1.0",
+    "tagPrefix": "pblatex-v",
+    "artifactDirectory": "release/plugin",
+    "description": "PBLaTex VS Code 插件"
+  }
+}

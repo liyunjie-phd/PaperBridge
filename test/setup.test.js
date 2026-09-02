@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createNewProject, detectMainTex, listMainTexCandidates, normalizeGitRepositoryUrl, normalizeOverleafGitUrl } from "../lib/setup.js";
-import { collectBuildErrors, collectBuildWarnings, compileProject, getDependencyStatus } from "../lib/project.js";
+import { collectBuildErrors, collectBuildLocations, collectBuildWarnings, compileProject, getDependencyStatus } from "../lib/project.js";
 
 test("Overleaf browser links are converted to authenticated Git URLs", () => {
   assert.equal(
@@ -86,6 +86,18 @@ test("LaTeX errors are separated from non-blocking warnings", () => {
   assert.ok(errors.some((error) => error.includes("LaTeX Error")));
 });
 
+test("compiler source locations retain the reported TeX file and line", () => {
+  const locations = collectBuildLocations([
+    "sections/method.tex:54: Undefined control sequence.",
+    "l.54 \\undefinedPaperBridgeCommand"
+  ].join("\n"), ["main.tex", "sections/method.tex"], "main.tex");
+  assert.deepEqual(locations[0], {
+    file: "sections/method.tex",
+    line: 54,
+    message: "Undefined control sequence."
+  });
+});
+
 test("a warning-only LaTeX build still produces a previewable PDF", async (t) => {
   const dependencies = await getDependencyStatus();
   if (dependencies.compiler === "missing") {
@@ -106,6 +118,43 @@ test("a warning-only LaTeX build still produces a previewable PDF", async (t) =>
     assert.equal(build.pdf.exists, true);
     assert.equal(build.errors.length, 0);
     assert.ok(build.warnings.some((warning) => warning.includes("Overfull")));
+  } finally {
+    const relative = path.relative(os.tmpdir(), root);
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a fatal rebuild invalidates an older PDF instead of exposing it as current", async (t) => {
+  const dependencies = await getDependencyStatus();
+  if (dependencies.compiler === "missing") {
+    t.skip("No LaTeX compiler is available in this environment.");
+    return;
+  }
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-failed-build-"));
+  try {
+    await fs.writeFile(path.join(root, "main.tex"), [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "Valid PDF before the error.",
+      "\\end{document}"
+    ].join("\n"), "utf8");
+    const valid = await compileProject(root, "main.tex");
+    assert.equal(valid.success, true);
+    assert.equal(valid.previewAvailable, true);
+
+    await fs.writeFile(path.join(root, "main.tex"), [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\undefinedPaperBridgeCommand",
+      "\\end{document}"
+    ].join("\n"), "utf8");
+    const failed = await compileProject(root, "main.tex");
+    assert.equal(failed.success, false);
+    assert.equal(failed.previewAvailable, false);
+    assert.equal(failed.recoverable, true);
+    assert.ok(failed.errors.length > 0);
+    assert.ok(failed.locations.some((location) => location.file === "main.tex" && location.line === 3));
   } finally {
     const relative = path.relative(os.tmpdir(), root);
     assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative));

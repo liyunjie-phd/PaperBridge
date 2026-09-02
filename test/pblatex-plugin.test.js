@@ -37,7 +37,7 @@ test("PBLaTex extension scaffold is named and wired as a LaTeX Workshop companio
   assert.doesNotMatch(workbench, /双语翻译|快速预览|AI 审改|文献工作台|DOI \/ URL|插入引用/);
   assert.equal(manifest.contributes.menus["view/title"].length, 2);
   assert.ok(!manifest.contributes.menus["view/title"].some((item) => item.command === "pblatex.refreshReferences"));
-  assert.match(server, /app\.post\("\/api\/review"/);
+  assert.doesNotMatch(server, /app\.post\("\/api\/review"/);
   assert.match(desktopHtml, /id="translateSectionButton"/);
   assert.match(desktopApp, /function translateCurrentSection\(\)/);
   assert.match(desktopApp, /enqueueSegmentTranslation\(segment, chinese, \{ silent: true \}\)/);

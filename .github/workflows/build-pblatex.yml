@@ -1,0 +1,44 @@
+name: Build PBLaTex VS Code extension
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "pblatex-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: PBLaTex VSIX
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Check product versions
+        run: node scripts/product-version.mjs check
+
+      - name: Verify PBLaTex release tag
+        if: github.ref_type == 'tag'
+        run: node scripts/product-version.mjs check-tag plugin "${{ github.ref_name }}"
+
+      - name: Package VS Code extension
+        working-directory: pblatex-vscode
+        run: |
+          mkdir -p ../release/plugin
+          npx --yes @vscode/vsce package --out "../release/plugin/PBLaTex-${{ github.ref_name }}.vsix"
+
+      - name: Upload PBLaTex artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PBLaTex-${{ github.ref_name }}
+          path: release/plugin/*.vsix
+          if-no-files-found: error

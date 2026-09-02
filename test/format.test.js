@@ -166,7 +166,7 @@ test("format analysis retries malformed weak-model output with validation feedba
   }
 });
 
-test("format migration requests approval before adding unexpected LaTeX commands", async () => {
+test("format migration writes LaTeX command changes directly and reports only compile failures", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-format-commands-"));
   const projectRoot = path.join(root, "project");
   let operationCalls = 0;
@@ -204,12 +204,9 @@ test("format migration requests approval before adding unexpected LaTeX commands
       }
     });
     const job = await analyzeFormat({ provider: {}, projectRoot, mainTex: "main.tex", requirements: "Add emphasis", filePaths: [] });
-    await assert.rejects(
-      applyFormat({ provider: {}, projectRoot, mainTex: "main.tex", jobId: job.id }),
-      (error) => error.code === "UNEXPECTED_LATEX_COMMANDS"
-        && error.details.unexpectedCommands.some((command) => command.includes("textbf"))
-        && Boolean(error.details.approvalToken)
-    );
+    const result = await applyFormat({ provider: {}, projectRoot, mainTex: "main.tex", jobId: job.id });
+    assert.equal(result.build.success, true);
+    assert.match(await fs.readFile(path.join(projectRoot, "main.tex"), "utf8"), /\\textbf\{method\}/);
     const latest = await latestFormatJob(projectRoot, "main.tex");
     assert.equal(latest.execution.modelAttempts, 2);
   } finally {

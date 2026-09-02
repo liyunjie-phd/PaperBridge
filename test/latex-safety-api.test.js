@@ -6,12 +6,11 @@ import path from "node:path";
 import test from "node:test";
 import { startServer, stopServer } from "../server.js";
 
-test("paragraph translation blocks dangerous commands and never writes formatting or duplicate paragraphs", async () => {
+test("paragraph translation writes LaTeX changes directly and makes one provider request", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperbridge-latex-safety-"));
   const projectRoot = path.join(root, "project");
   let providerServer;
   let providerOutput = "A safe replacement paragraph contains enough academic words for publication.";
-  let providerOutputs = [];
   let providerCalls = 0;
   try {
     await fs.mkdir(projectRoot);
@@ -26,7 +25,7 @@ test("paragraph translation blocks dangerous commands and never writes formattin
       }
       providerCalls += 1;
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ choices: [{ message: { content: providerOutputs.shift() || providerOutput } }] }));
+      response.end(JSON.stringify({ choices: [{ message: { content: providerOutput } }] }));
     });
     await new Promise((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
     const providerPort = providerServer.address().port;
@@ -67,48 +66,38 @@ test("paragraph translation blocks dangerous commands and never writes formattin
       sourceHash: segment.sourceHash,
       chinese: "这是需要更新的中文论文段落。"
     });
-    assert.equal(result.response.status, 422);
-    assert.equal(result.payload.code, "DANGEROUS_LATEX_COMMANDS");
+    assert.equal(result.response.ok, true, JSON.stringify(result.payload));
     assert.equal(providerCalls, 1);
+    assert.match(result.payload.document.segments[0].english, /\\input\{C:\/private-file\}/);
 
-    providerOutputs = [
-      [
-        "An invalid \\textbf{replacement} paragraph contains enough academic words for publication.",
-        "",
-        "An invalid \\textbf{replacement} paragraph contains enough academic words for publication."
-      ].join("\n"),
-      "A corrected replacement paragraph contains enough \\emph{publication} words without new formatting."
-    ];
+    const changed = result.payload.document.segments[0];
+    result = await request("/api/segment/english", {
+      file: "main.tex",
+      index: changed.index,
+      sourceHash: changed.sourceHash,
+      english: "A manual edit removes the input command and keeps enough academic words for publication.",
+      chinese: "手动删除命令后的中文稿。",
+      deferCompile: true
+    });
+    assert.equal(result.response.ok, true, JSON.stringify(result.payload));
+    assert.equal(result.payload.build, null);
+
+    const manuallyChanged = result.payload.document.segments[0];
+    providerOutput = [
+      "An output with a new \\textbf{command} and a repeated body.",
+      "",
+      "An output with a new \\textbf{command} and a repeated body."
+    ].join("\n");
     result = await request("/api/segment/translate", {
       file: "main.tex",
-      index: segment.index,
-      sourceHash: segment.sourceHash,
+      index: manuallyChanged.index,
+      sourceHash: manuallyChanged.sourceHash,
       chinese: "这是需要更新的中文论文段落。"
     });
     assert.equal(result.response.ok, true, JSON.stringify(result.payload));
-    assert.equal(providerCalls, 3);
-    assert.equal(result.payload.document.segments.length, 1);
-    assert.doesNotMatch(result.payload.document.segments[0].english, /textbf/);
-    assert.match(result.payload.document.segments[0].english, /corrected replacement paragraph/);
-
-    const corrected = result.payload.document.segments[0];
-    providerOutputs = [
-      "A repeated \\emph{translation} remains invalid because it is returned twice.\n\nA repeated \\emph{translation} remains invalid because it is returned twice.",
-      "A repeated \\emph{translation} remains invalid because it is returned twice.\n\nA repeated \\emph{translation} remains invalid because it is returned twice."
-    ];
-    result = await request("/api/segment/translate", {
-      file: "main.tex",
-      index: corrected.index,
-      sourceHash: corrected.sourceHash,
-      chinese: "这是另一段需要更新的中文论文段落。"
-    });
-    assert.equal(result.response.status, 422);
-    assert.equal(result.payload.code, "INVALID_TRANSLATION_OUTPUT");
-    assert.match(result.payload.details.issues.join(" "), /重复段落/);
-    assert.equal(providerCalls, 5);
-    const unchanged = await fs.readFile(path.join(projectRoot, "main.tex"), "utf8");
-    assert.equal((unchanged.match(/corrected replacement paragraph/g) || []).length, 1);
-    assert.doesNotMatch(unchanged, /repeated translation/);
+    assert.equal(providerCalls, 2);
+    assert.match(result.payload.document.segments[0].english, /repeated body/);
+    assert.match(await fs.readFile(path.join(projectRoot, "main.tex"), "utf8"), /repeated body/);
   } finally {
     await stopServer();
     if (providerServer) await new Promise((resolve) => providerServer.close(resolve));

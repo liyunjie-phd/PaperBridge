@@ -1,0 +1,47 @@
+name: Build PaperBridge for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "windows-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows x64
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check product versions
+        run: npm run versions:check
+
+      - name: Verify Windows release tag
+        if: github.ref_type == 'tag'
+        run: node scripts/product-version.mjs check-tag windows "${{ github.ref_name }}"
+
+      - name: Build Windows installer
+        run: npm run build:windows
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaperBridge-windows-${{ github.ref_name }}
+          path: |
+            release/windows/PaperBridge-Setup.exe
+            release/windows/PaperBridge-Setup.exe.blockmap
+          if-no-files-found: error

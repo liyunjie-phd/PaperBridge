@@ -37,6 +37,10 @@ test("web gateway requires login and accepts a valid session", async () => {
     const unauthenticated = await fetch(`http://127.0.0.1:${running.port}/api/bootstrap`);
     assert.equal(unauthenticated.status, 401);
 
+    const version = await fetch(`http://127.0.0.1:${running.port}/api/web/version`);
+    assert.equal(version.status, 200);
+    assert.deepEqual(await version.json(), { product: "web", version: "0.1.0" });
+
     const login = await fetch(`http://127.0.0.1:${running.port}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

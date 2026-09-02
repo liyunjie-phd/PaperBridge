@@ -81,6 +81,7 @@ const state = {
   pdfNavigationBusy: false,
   pdfExportToken: 0,
   buildPreviewAvailable: null,
+  compileInFlight: false,
   formatFiles: [],
   formatJob: null,
   editorFontSize: Math.min(20, Math.max(14, Number(localStorage.getItem("paperBridge.editorFontSize") || 16))),
@@ -137,12 +138,17 @@ const elements = {
   workspace: document.querySelector(".workspace"),
   sidebar: document.querySelector(".sidebar"),
   projectName: document.querySelector("#projectName"),
+  topCurrentFile: document.querySelector("#topCurrentFile"),
+  headerSaveState: document.querySelector("#headerSaveState"),
   syncState: document.querySelector("#syncState"),
   undoButton: document.querySelector("#undoButton"),
   undoCount: document.querySelector("#undoCount"),
   gitRemoteTarget: document.querySelector("#gitRemoteTarget"),
   gitRemoteSelect: document.querySelector("#gitRemoteSelect"),
   sidebarProjectList: document.querySelector("#sidebarProjectList"),
+  projectSwitcherButton: document.querySelector("#projectSwitcherButton"),
+  projectSwitcherPopover: document.querySelector("#projectSwitcherPopover"),
+  projectSwitcherList: document.querySelector("#projectSwitcherList"),
   documentCount: document.querySelector("#documentCount"),
   documentList: document.querySelector("#documentList"),
   translationProgress: document.querySelector("#translationProgress"),
@@ -181,8 +187,11 @@ const elements = {
   compileDiagnosisList: document.querySelector("#compileDiagnosisList"),
   editView: document.querySelector("#editView"),
   sourceView: document.querySelector("#sourceView"),
+  sourceFocusButton: document.querySelector("#sourceFocusButton"),
+  sourceCreateTexButton: document.querySelector("#sourceCreateTexButton"),
   sourceFileSelect: document.querySelector("#sourceFileSelect"),
   sourceEditor: document.querySelector("#sourceEditor"),
+  sourceHighlightLayer: document.querySelector("#sourceHighlightLayer"),
   sourceLineNumbers: document.querySelector("#sourceLineNumbers"),
   sourceStatus: document.querySelector("#sourceStatus"),
   saveSourceButton: document.querySelector("#saveSourceButton"),
@@ -506,50 +515,102 @@ function renderRecentProjects(project) {
 function renderSidebarProjectList(project = state.project) {
   const list = elements.sidebarProjectList;
   if (!list) return;
-  const projects = project?.config?.recentProjects || [];
+  const config = project?.config || {};
+  const projects = config.recentProjects || [];
   list.replaceChildren();
-  if (!projects.length) {
+  if (!project) {
     const empty = document.createElement("div");
     empty.className = "project-switch-empty";
-    empty.textContent = "当前项目";
+    empty.textContent = "尚未打开项目";
     list.append(empty);
     return;
   }
-  const currentRoot = String(project.config?.projectRoot || "").toLowerCase();
-  const currentMainTex = String(project.config?.mainTex || "").toLowerCase();
+  const currentRoot = String(config.projectRoot || "").toLowerCase();
+  const currentMainTex = String(config.mainTex || "").toLowerCase();
+  const recentCurrent = projects.find((item) => (
+    currentRoot === String(item.projectRoot || "").toLowerCase()
+    && currentMainTex === String(item.mainTex || "").toLowerCase()
+  ));
+  const current = {
+    ...(recentCurrent || {}),
+    name: config.projectName || recentCurrent?.name || fileLabel(config.projectRoot || "论文项目"),
+    projectRoot: config.projectRoot,
+    mainTex: config.mainTex,
+    git: project.git
+  };
+  const row = document.createElement("div");
+  const button = document.createElement("button");
+  const manageButton = document.createElement("button");
+  row.className = "project-switch-row current-project-card";
+  button.type = "button";
+  button.className = "project-switch-button active";
+  button.title = current.projectRoot || "";
+  button.innerHTML = `
+    <i data-lucide="folder"></i>
+    <span class="project-switch-copy">
+      <span class="project-switch-name"></span>
+      <span class="project-git-services"></span>
+      <span class="project-connection-state"><span class="status-dot"></span><span></span></span>
+    </span>
+  `;
+  button.querySelector(".project-switch-name").textContent = current.name;
+  button.querySelector(".project-git-services").textContent = projectGitServiceText(project);
+  button.querySelector(".project-connection-state span:last-child").textContent = project.git?.remoteName ? "已连接" : "未连接远端";
+  manageButton.type = "button";
+  manageButton.className = "project-git-manage-button";
+  manageButton.title = projectGitServices(project).length ? "管理 Git 远端" : "连接远端";
+  manageButton.setAttribute("aria-label", `${current.name}：${manageButton.title}`);
+  manageButton.innerHTML = `<i data-lucide="arrow-up-right"></i>`;
+  manageButton.addEventListener("click", () => void openGitManager(current));
+  row.append(button, manageButton);
+  list.append(row);
+  renderProjectSwitcherMenu(project);
+  refreshIcons();
+}
+
+function renderProjectSwitcherMenu(project = state.project) {
+  const list = elements.projectSwitcherList;
+  if (!list || !project) return;
+  const config = project.config || {};
+  const currentRoot = String(config.projectRoot || "").toLowerCase();
+  const currentMainTex = String(config.mainTex || "").toLowerCase();
+  const projects = (config.recentProjects || []).filter((item) => !(
+    currentRoot === String(item.projectRoot || "").toLowerCase()
+    && currentMainTex === String(item.mainTex || "").toLowerCase()
+  ));
+  list.replaceChildren();
+  if (!projects.length) {
+    const empty = document.createElement("div");
+    empty.className = "project-switcher-empty";
+    empty.innerHTML = '<i data-lucide="folder-clock"></i><span>还没有其他最近项目</span>';
+    list.append(empty);
+    return;
+  }
   for (const item of projects) {
-    const row = document.createElement("div");
     const button = document.createElement("button");
-    const manageButton = document.createElement("button");
-    const isCurrent = currentRoot === String(item.projectRoot || "").toLowerCase()
-      && currentMainTex === String(item.mainTex || "").toLowerCase();
-    row.className = "project-switch-row";
     button.type = "button";
-    button.className = `project-switch-button ${isCurrent ? "active" : ""}`;
+    button.className = "project-switcher-item";
     button.title = item.projectRoot || "";
     button.innerHTML = `
-      <i data-lucide="${isCurrent ? "folder-open" : "folder"}"></i>
-      <span class="project-switch-copy">
-        <span class="project-switch-name"></span>
-        <span class="project-git-services"></span>
+      <i data-lucide="folder"></i>
+      <span class="project-switcher-item-copy">
+        <strong></strong>
+        <span class="project-switcher-item-path"></span>
+        <span class="project-switcher-item-meta"></span>
       </span>
+      <i data-lucide="arrow-right"></i>
     `;
-    button.querySelector(".project-switch-name").textContent = item.name || fileLabel(item.projectRoot || "论文项目");
-    button.querySelector(".project-git-services").textContent = projectGitServiceText(item);
+    button.querySelector("strong").textContent = item.name || fileLabel(item.projectRoot || "论文项目");
+    button.querySelector(".project-switcher-item-path").textContent = item.mainTex || item.projectRoot || "";
+    button.querySelector(".project-switcher-item-meta").textContent = [
+      projectGitServiceText(item),
+      recentProjectTimeLabel(item.updatedAt)
+    ].filter(Boolean).join(" · ");
     button.addEventListener("click", () => {
-      if (!isCurrent) void openRecentProject(item, button);
+      elements.projectSwitcherPopover?.hidePopover?.();
+      void openRecentProject(item, button);
     });
-    manageButton.type = "button";
-    manageButton.className = "project-git-manage-button";
-    manageButton.title = projectGitServices(item).length ? "管理 Git 远端" : "连接远端";
-    manageButton.setAttribute("aria-label", `${item.name || "论文项目"}：${manageButton.title}`);
-    manageButton.innerHTML = `
-      <i data-lucide="${projectGitServices(item).length ? "git-branch" : "link-2"}"></i>
-      <span>${projectGitServices(item).length ? "管理" : "连接远端"}</span>
-    `;
-    manageButton.addEventListener("click", () => void openGitManager(item));
-    row.append(button, manageButton);
-    list.append(row);
+    list.append(button);
   }
   refreshIcons();
 }
@@ -560,6 +621,7 @@ async function openRecentProject(project, button) {
     state.sourceDirty = false;
   }
   setBusy(button, true);
+  elements.projectSwitcherPopover?.hidePopover?.();
   if (elements.setupDialog.open) setSetupMessage("正在打开历史项目...");
   try {
     await api("/api/project/open", {
@@ -1850,6 +1912,17 @@ function highlightLocatedMathBlock(file, id) {
 }
 
 async function locatePdfSelection(event) {
+  if (state.compileInFlight || state.buildPreviewAvailable === false) {
+    elements.buildDrawer.classList.remove("hidden");
+    toast(
+      state.compileInFlight
+        ? "新的 PDF 仍在编译，暂时不能定位。"
+        : "本次编译失败，旧 PDF 已停用。请使用编译错误中的源码位置。",
+      "error",
+      4200
+    );
+    return;
+  }
   if (state.pdfNavigationBusy) {
     elements.pdfScroll.dataset.navigationState = "busy";
     return;
@@ -1924,13 +1997,17 @@ async function locatePdfSelection(event) {
 async function locateFastPreviewSelection(event) {
   const block = event.target.closest(".fast-preview-block");
   if (!block) return;
-  const file = state.fastPreviewFile || state.currentDocument?.file || state.project?.config?.mainTex || "";
+  const file = block.dataset.sourceFile
+    || state.fastPreviewFile
+    || state.currentDocument?.file
+    || state.project?.config?.mainTex
+    || "";
   const line = Number(block.dataset.sourceLine || 0);
   if (!file || !line) return;
   block.classList.remove("source-highlight");
   void block.offsetWidth;
   block.classList.add("source-highlight");
-  window.setTimeout(() => block.classList.remove("source-highlight"), 1800);
+  window.setTimeout(() => block.classList.remove("source-highlight"), 2400);
   try {
     let documentPayload = state.currentDocument?.file === file ? state.currentDocument : null;
     if (!documentPayload && state.project?.documents?.some((item) => item.file === file)) {
@@ -2074,7 +2151,6 @@ function translationFailureMessage(error) {
   }
   const missing = details.missingTokens;
   if (missing?.length) return `模型丢失 LaTeX 标记：${missing.join(", ")}`;
-  if (error.payload?.code === "DANGEROUS_LATEX_COMMANDS") return dangerousLatexMessage(error);
   return error.message;
 }
 
@@ -2092,10 +2168,31 @@ function statusLabel(status) {
   return "无中文";
 }
 
+function updateTopbarCurrentFile(file = "") {
+  if (!elements.topCurrentFile) return;
+  elements.topCurrentFile.textContent = file || state.sourceFile || state.currentFile || state.project?.config?.mainTex || "未选择文件";
+  elements.topCurrentFile.title = elements.topCurrentFile.textContent;
+}
+
+function updateHeaderSaveState(status = "saved") {
+  if (!elements.headerSaveState) return;
+  const normalized = ["saving", "dirty", "error"].includes(status) ? status : "saved";
+  if (elements.headerSaveState.dataset.status === normalized) return;
+  elements.headerSaveState.dataset.status = normalized;
+  elements.headerSaveState.className = `header-save-state ${normalized}`;
+  const icon = elements.headerSaveState.querySelector("[data-lucide], svg");
+  const label = elements.headerSaveState.querySelector("span");
+  if (icon) icon.setAttribute("data-lucide", normalized === "error" ? "circle-alert" : normalized === "saved" ? "circle-check" : "circle-dot");
+  if (label) label.textContent = normalized === "saving" ? "保存中" : normalized === "dirty" ? "等待保存" : normalized === "error" ? "保存失败" : "已保存";
+  refreshIcons();
+}
+
 function updateProjectHeader() {
   const config = state.project.config;
   applyUndoStatus(state.project.undo || {});
-  elements.projectName.textContent = `${config.projectName || fileLabel(config.projectRoot || "论文项目")} · ${config.mainTex} · ${config.projectRoot}`;
+  elements.projectName.textContent = config.projectName || fileLabel(config.projectRoot || "论文项目");
+  elements.projectName.title = config.projectRoot || "";
+  updateTopbarCurrentFile(state.sourceFile || state.currentFile || config.mainTex);
   const git = state.project.git;
   const remotes = Array.isArray(git.remotes) ? git.remotes : [];
   state.gitRemoteName = git.remoteName || "";
@@ -2118,8 +2215,8 @@ function updateProjectHeader() {
   const pushButton = document.querySelector("#pushButton");
   pullButton.disabled = !hasRemote;
   pushButton.disabled = !hasRemote;
-  pullButton.querySelector("span").textContent = hasRemote ? `拉取 ${remoteLabel}` : "拉取";
-  pushButton.querySelector("span").textContent = hasRemote ? `推送 ${remoteLabel}` : "推送";
+  pullButton.querySelector("span").textContent = "拉取";
+  pushButton.querySelector("span").textContent = hasRemote ? `同步至 ${remoteLabel}` : "同步";
   pullButton.title = hasRemote ? `从 ${remoteTargetLabel} 拉取最新版本` : "当前项目没有连接 Git 远端仓库";
   pushButton.title = hasRemote ? `提交并推送至 ${remoteTargetLabel}` : "当前项目没有连接 Git 远端仓库";
   elements.syncState.className = `sync-state ${git.available ? (git.dirty ? "dirty" : "clean") : "error"}`;
@@ -3300,11 +3397,14 @@ function fastPreviewSplitProseEnv({ envName, envArgs, bodyLines, bodyStartLine, 
   });
 }
 
-function splitFastPreviewBlocks(source) {
+function splitFastPreviewBlocks(source, options = {}) {
   const lines = String(source || "").replace(/\r\n/g, "\n").split("\n");
   const visibleLines = lines.map((line) => fastPreviewVisibleLine(line));
   const blocks = [];
   const ordinals = new Map();
+  const blockFile = String(options.file || "");
+  const lineOffset = Math.max(0, Number(options.lineOffset || 0));
+  const idScope = `${fastPreviewHash(blockFile).toString(16)}-${lineOffset}`;
   let blockStart = 0;
   let blockLines = [];
 
@@ -3312,7 +3412,7 @@ function splitFastPreviewBlocks(source) {
     const hash = fastPreviewHash(blockSource).toString(16);
     const ordinal = ordinals.get(hash) || 0;
     ordinals.set(hash, ordinal + 1);
-    return `fast-block-${hash}-${ordinal}`;
+    return `fast-block-${idScope}-${hash}-${ordinal}`;
   };
   const pushBlock = (endLine) => {
     if (!blockLines.some((line) => line.trim())) {
@@ -3320,7 +3420,13 @@ function splitFastPreviewBlocks(source) {
       return;
     }
     const blockSource = blockLines.join("\n");
-    blocks.push({ id: nextId(blockSource), startLine: blockStart + 1, endLine: endLine + 1, source: blockSource });
+    blocks.push({
+      id: nextId(blockSource),
+      file: blockFile,
+      startLine: lineOffset + blockStart + 1,
+      endLine: lineOffset + endLine + 1,
+      source: blockSource
+    });
     blockLines = [];
   };
 
@@ -3330,6 +3436,14 @@ function splitFastPreviewBlocks(source) {
     const boundary = trimmed === "" || FAST_PREVIEW_SECTION_PATTERN.test(trimmed) || FAST_PREVIEW_BEGIN_END_PATTERN.test(trimmed);
     if (boundary && blockLines.length) pushBlock(index - 1);
     if (trimmed === "") {
+      blockStart = index + 1;
+      continue;
+    }
+
+    if (FAST_PREVIEW_SECTION_PATTERN.test(trimmed)) {
+      blockStart = index;
+      blockLines = [line];
+      pushBlock(index);
       blockStart = index + 1;
       continue;
     }
@@ -3363,8 +3477,9 @@ function splitFastPreviewBlocks(source) {
       envBlocks.forEach((block) => blocks.push({
         ...block,
         id: nextId(block.source),
-        startLine: block.startLine + 1,
-        endLine: block.endLine + 1
+        file: blockFile,
+        startLine: lineOffset + block.startLine + 1,
+        endLine: lineOffset + block.endLine + 1
       }));
       blockStart = index + 1;
       continue;
@@ -3377,8 +3492,71 @@ function splitFastPreviewBlocks(source) {
   return blocks;
 }
 
+function fastPreviewIncludedFile(parentFile, reference) {
+  const source = String(reference || "").trim().replaceAll("\\", "/");
+  if (!source || source.includes("\0")) return "";
+  const withExtension = /\.[A-Za-z0-9]+$/.test(source) ? source : `${source}.tex`;
+  const base = String(parentFile || "").replaceAll("\\", "/").split("/").slice(0, -1);
+  const resolved = [];
+  for (const part of [...base, ...withExtension.split("/")]) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (!resolved.length) return "";
+      resolved.pop();
+    } else {
+      resolved.push(part);
+    }
+  }
+  return resolved.join("/");
+}
+
+async function resolveFastPreviewParts(file, content, seen = new Set(), depth = 0) {
+  const normalizedFile = String(file || "").replaceAll("\\", "/");
+  if (!normalizedFile || depth > 5 || seen.has(normalizedFile.toLowerCase())) return [];
+  const nextSeen = new Set(seen);
+  nextSeen.add(normalizedFile.toLowerCase());
+  const lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+  const parts = [];
+  let chunkStart = 0;
+  const pushChunk = (end) => {
+    if (end <= chunkStart) return;
+    parts.push({ file: normalizedFile, content: lines.slice(chunkStart, end).join("\n"), lineOffset: chunkStart });
+  };
+  for (let index = 0; index < lines.length; index += 1) {
+    const visible = fastPreviewVisibleLine(lines[index]).trim();
+    const match = visible.match(/^\\(?:input|include)\s*\{([^{}]+)\}\s*$/);
+    if (!match) continue;
+    pushChunk(index);
+    const includedFile = fastPreviewIncludedFile(normalizedFile, match[1]);
+    if (includedFile) {
+      try {
+        const included = await api(`/api/source?file=${encodeURIComponent(includedFile)}`);
+        parts.push(...await resolveFastPreviewParts(included.file || includedFile, included.content, nextSeen, depth + 1));
+      } catch {
+        // A missing optional include should not break the rest of the fast preview.
+      }
+    }
+    chunkStart = index + 1;
+  }
+  pushChunk(lines.length);
+  return parts.length ? parts : [{ file: normalizedFile, content: String(content || ""), lineOffset: 0 }];
+}
+
+function splitFastPreviewSource(source) {
+  const parts = Array.isArray(source.parts) && source.parts.length
+    ? source.parts
+    : [{ file: source.file, content: source.content, lineOffset: 0 }];
+  return parts.flatMap((part) => splitFastPreviewBlocks(part.content, {
+    file: part.file,
+    lineOffset: part.lineOffset
+  }));
+}
+
 function renderFastPreviewText(source) {
-  return fastPreviewEscape(source)
+  const readable = String(source || "")
+    .replace(/\\([%&_#{}])/g, "$1")
+    .replaceAll("~", "\u00a0");
+  return fastPreviewEscape(readable)
     .replace(/\\(?:textbf|bfseries)\s*\{([^{}]*)\}/g, "<strong>$1</strong>")
     .replace(/\\(?:emph|textit)\s*\{([^{}]*)\}/g, "<em>$1</em>")
     .replace(/\\(?:cite\w*|ref|eqref|autoref|cref|Cref|pageref)\s*(?:\[[^\]]*\]\s*)*\{([^{}]*)\}/g, "<span class=\"fast-preview-command\">[$1]</span>")
@@ -3480,6 +3658,46 @@ function fastPreviewMathEnvironment(source, envName) {
   return body;
 }
 
+function extractLatexCommandArgument(source, command) {
+  const visible = String(source || "").split(/\r?\n/).map(fastPreviewVisibleLine).join("\n");
+  const match = new RegExp(`\\\\${command}\\s*\\{`).exec(visible);
+  if (!match) return "";
+  const start = match.index + match[0].length;
+  let depth = 1;
+  for (let cursor = start; cursor < visible.length; cursor += 1) {
+    if (visible[cursor] === "{" && !fastPreviewIsEscaped(visible, cursor)) depth += 1;
+    if (visible[cursor] === "}" && !fastPreviewIsEscaped(visible, cursor)) depth -= 1;
+    if (depth === 0) return visible.slice(start, cursor).trim();
+  }
+  return "";
+}
+
+function fastPreviewPaperHeaderMarkup(source) {
+  const title = extractLatexCommandArgument(source, "title");
+  if (!title) return "";
+  return `<header class="fast-preview-paper-header"><h1>${renderFastPreviewInline(title)}</h1></header>`;
+}
+
+function updateFastPreviewPaperHeader(documentNode, source) {
+  if (!documentNode) return null;
+  const markup = fastPreviewPaperHeaderMarkup(source);
+  let header = documentNode.querySelector(".fast-preview-paper-header");
+  if (!markup) {
+    header?.remove();
+    return null;
+  }
+  if (!header) {
+    const template = document.createElement("template");
+    template.innerHTML = markup;
+    header = template.content.firstElementChild;
+    documentNode.querySelector(".fast-preview-meta")?.after(header);
+  } else if (header.outerHTML !== markup) {
+    header.outerHTML = markup;
+    header = documentNode.querySelector(".fast-preview-paper-header");
+  }
+  return header;
+}
+
 function renderFastPreviewBlock(block) {
   const source = block.source.trim();
   const section = source.match(/^\\(chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\{([^{}]*)\}/);
@@ -3489,6 +3707,13 @@ function renderFastPreviewBlock(block) {
   } else if (section) {
     const tag = section[1] === "chapter" || section[1] === "section" ? "h2" : section[1] === "subsection" ? "h3" : "h4";
     html = `<${tag}>${renderFastPreviewInline(section[2])}</${tag}>`;
+  } else if (block.parentEnv === "abstract") {
+    const first = /^\\begin\{abstract\}/.test(source);
+    const body = source
+      .replace(/^\\begin\{abstract\}[^\n]*\n?/, "")
+      .replace(/\n?\\end\{abstract\}\s*$/, "")
+      .trim();
+    html = `<p class="fast-preview-abstract">${first ? '<strong class="fast-preview-abstract-label">Abstract—</strong>' : ""}${renderFastPreviewInline(body)}</p>`;
   } else if (/^\\begin\{/.test(source)) {
     const envName = source.match(/^\\begin\{([^{}]+)\}/)?.[1] || "environment";
     if (/^(equation|align|gather|multline|alignat|flalign)\*?$/.test(envName)) {
@@ -3512,6 +3737,7 @@ function renderFastPreviewBlock(block) {
 function setPreviewMode(mode) {
   state.previewMode = mode;
   elements.previewPanel.dataset.previewMode = mode;
+  if (mode === "fast") elements.previewPanel.classList.remove("compile-failed", "compile-running");
   elements.previewModeLabel.textContent = mode === "pdf" ? "正式 PDF" : "快速预览";
   elements.pdfScroll.classList.toggle("fast-preview-scroll", mode === "fast");
   elements.pdfScroll.classList.toggle("pdf-preview-scroll", mode === "pdf");
@@ -3532,13 +3758,81 @@ function resetPdfRenderer() {
   state.pdfDocument = null;
 }
 
+function renderCompileProgress() {
+  setPreviewMode("pdf");
+  resetPdfRenderer();
+  invalidatePdfNavigationIndex();
+  elements.previewPanel.classList.remove("compile-failed");
+  elements.previewPanel.classList.add("compile-running");
+  elements.pageStatus.textContent = "正在编译全文";
+  elements.visiblePage.textContent = "—";
+  const stateNode = document.createElement("div");
+  stateNode.className = "compile-progress-preview";
+  stateNode.innerHTML = '<i data-lucide="loader-circle"></i><strong>正在生成新的 PDF</strong><span>完成前不会继续显示或定位旧 PDF。</span>';
+  elements.pdfScroll.replaceChildren(stateNode);
+  refreshIcons();
+}
+
+function renderCompileFailure(build = state.project?.lastBuild || {}) {
+  setPreviewMode("pdf");
+  resetPdfRenderer();
+  invalidatePdfNavigationIndex();
+  elements.previewPanel.classList.remove("compile-running");
+  elements.previewPanel.classList.add("compile-failed");
+  elements.pageStatus.textContent = "编译失败 · PDF 未更新";
+  elements.visiblePage.textContent = "—";
+
+  const errors = (build.errors || []).filter(Boolean);
+  const locations = (build.locations || []).filter((item) => item?.file && item?.line);
+  const card = document.createElement("section");
+  card.className = "compile-failure-preview";
+  const heading = document.createElement("div");
+  heading.className = "compile-failure-heading";
+  heading.innerHTML = '<i data-lucide="circle-x"></i><div><strong>本次编译失败</strong><span>旧 PDF 已停用，避免显示过期排版或跳转到错误位置。</span></div>';
+  const errorList = document.createElement("div");
+  errorList.className = "compile-failure-errors";
+  for (const message of (errors.length ? errors : ["LaTeX 编译器没有生成可用 PDF，请查看完整编译信息。"]).slice(0, 4)) {
+    const row = document.createElement("div");
+    row.textContent = message;
+    errorList.append(row);
+  }
+  const actions = document.createElement("div");
+  actions.className = "compile-failure-actions";
+  for (const location of locations.slice(0, 4)) {
+    const button = document.createElement("button");
+    button.className = "button secondary compile-location-button";
+    button.type = "button";
+    button.innerHTML = '<i data-lucide="code-2"></i><span></span>';
+    button.querySelector("span").textContent = `${location.file}:${location.line}`;
+    button.title = location.message || "打开编译器报告的源码位置";
+    button.addEventListener("click", () => void openSourceLocation(location.file, location.line));
+    actions.append(button);
+  }
+  const detailsButton = document.createElement("button");
+  detailsButton.className = "button primary";
+  detailsButton.type = "button";
+  detailsButton.innerHTML = '<i data-lucide="list-tree"></i><span>查看完整编译信息</span>';
+  detailsButton.addEventListener("click", () => {
+    state.dismissedBuildDrawerFingerprint = "";
+    elements.buildDrawer.classList.remove("hidden");
+  });
+  actions.append(detailsButton);
+  card.append(heading, errorList, actions);
+  elements.pdfScroll.replaceChildren(card);
+  refreshIcons();
+}
+
 async function fastPreviewSource(file = "") {
   const sourceFile = file || state.currentDocument?.file || state.sourceFile || state.project?.config?.mainTex || "";
   if (!sourceFile) throw new Error("尚未选择可预览的 TeX 文件。");
-  if (state.sourceDirty && state.sourceFile === sourceFile) {
-    return { file: sourceFile, content: elements.sourceEditor.value };
+  const source = state.sourceDirty && state.sourceFile === sourceFile
+    ? { file: sourceFile, content: elements.sourceEditor.value }
+    : await api(`/api/source?file=${encodeURIComponent(sourceFile)}`);
+  const mainTex = state.project?.config?.mainTex || "";
+  if (sourceFile === mainTex) {
+    source.parts = await resolveFastPreviewParts(source.file, source.content);
   }
-  return api(`/api/source?file=${encodeURIComponent(sourceFile)}`);
+  return source;
 }
 
 function registerFastPreviewMath(root) {
@@ -3591,7 +3885,7 @@ function applyFastPreviewPatches(nextBlocks) {
     .filter((block) => !newIds.has(block.id))
     .forEach((block) => document.getElementById(block.id)?.remove());
 
-  let anchor = documentNode.querySelector(".fast-preview-meta");
+  let anchor = documentNode.querySelector(".fast-preview-paper-header") || documentNode.querySelector(".fast-preview-meta");
   for (const block of nextBlocks) {
     if (!block.html) continue;
     const old = oldById.get(block.id);
@@ -3603,6 +3897,7 @@ function applyFastPreviewPatches(nextBlocks) {
       anchor.after(node);
     }
     if (!old || old.htmlHash !== block.htmlHash) node.innerHTML = block.html;
+    node.dataset.sourceFile = block.file || state.fastPreviewFile;
     node.dataset.sourceLine = String(block.startLine);
     node.dataset.endLine = String(block.endLine);
     if (node.previousElementSibling !== anchor) anchor.after(node);
@@ -3628,8 +3923,9 @@ async function renderFastPreview(file = "") {
     if (token !== state.fastPreviewToken) return;
     const fileChanged = state.fastPreviewFile && state.fastPreviewFile !== source.file;
     if (fileChanged) state.fastPreviewCache = [];
-    const nextBlocks = splitFastPreviewBlocks(source.content).map(renderFastPreviewBlock);
+    const nextBlocks = splitFastPreviewSource(source).map(renderFastPreviewBlock);
     state.fastPreviewFile = source.file;
+    updateFastPreviewPaperHeader(elements.pdfScroll.querySelector(".fast-preview-document"), source.content);
     const reused = applyFastPreviewPatches(nextBlocks);
     if (!reused) {
       const documentNode = document.createElement("div");
@@ -3638,11 +3934,18 @@ async function renderFastPreview(file = "") {
       meta.className = "fast-preview-meta";
       meta.textContent = `${source.file} · 快速 HTML 预览，正式排版请点击“编译全文”`;
       documentNode.append(meta);
+      const headerMarkup = fastPreviewPaperHeaderMarkup(source.content);
+      if (headerMarkup) {
+        const template = document.createElement("template");
+        template.innerHTML = headerMarkup;
+        documentNode.append(template.content.firstElementChild);
+      }
       for (const block of nextBlocks) {
         if (!block.html) continue;
         const node = document.createElement("div");
         node.className = "fast-preview-block";
         node.id = block.id;
+        node.dataset.sourceFile = block.file || source.file;
         node.dataset.sourceLine = String(block.startLine);
         node.dataset.endLine = String(block.endLine);
         node.innerHTML = block.html;
@@ -3680,7 +3983,16 @@ function previewFileAfterSourceChange(file = "") {
 }
 
 async function renderPdf() {
+  if (state.compileInFlight) {
+    renderCompileProgress();
+    return;
+  }
+  if (state.buildPreviewAvailable === false) {
+    renderCompileFailure();
+    return;
+  }
   setPreviewMode("pdf");
+  elements.previewPanel.classList.remove("compile-failed", "compile-running");
   state.fastPreviewMathObserver?.disconnect();
   const token = ++state.pdfRenderToken;
   window.clearTimeout(state.pdfRenderTimer);
@@ -3742,16 +4054,19 @@ async function renderPdf() {
 
 function updatePdf(pdf = state.project?.pdf) {
   if (state.previewMode !== "pdf") return;
-  if (state.buildPreviewAvailable === false || !pdf?.exists) {
-    state.pdfRenderToken += 1;
-    state.pdfObserver?.disconnect();
-    state.pdfObserver = null;
-    for (const task of state.pdfPageRenderTasks.values()) task.cancel();
-    state.pdfPageRenderTasks.clear();
-    for (const entry of state.pdfTextLayers.values()) if (!entry.ready) entry.task.cancel();
-    state.pdfTextLayers.clear();
-    state.pdfDocument = null;
-    elements.pageStatus.textContent = state.buildPreviewAvailable === false ? "编译错误" : "PDF 未生成";
+  if (state.compileInFlight) {
+    renderCompileProgress();
+    return;
+  }
+  if (state.buildPreviewAvailable === false) {
+    renderCompileFailure();
+    return;
+  }
+  if (!pdf?.exists) {
+    resetPdfRenderer();
+    elements.previewPanel.classList.remove("compile-failed", "compile-running");
+    elements.pageStatus.textContent = "PDF 未生成";
+    elements.visiblePage.textContent = "—";
     elements.pdfScroll.replaceChildren();
     return;
   }
@@ -3783,11 +4098,15 @@ function movePdfPage(delta) {
 
 function flashSourceSelection() {
   window.clearTimeout(state.sourceHighlightTimer);
+  const stage = elements.sourceEditor.closest(".source-editor-stage");
   elements.sourceEditor.classList.remove("source-located");
-  void elements.sourceEditor.offsetWidth;
+  stage?.classList.remove("source-located");
+  void (stage || elements.sourceEditor).offsetWidth;
   elements.sourceEditor.classList.add("source-located");
+  stage?.classList.add("source-located");
   state.sourceHighlightTimer = window.setTimeout(() => {
     elements.sourceEditor.classList.remove("source-located");
+    stage?.classList.remove("source-located");
   }, 2600);
 }
 
@@ -3863,7 +4182,7 @@ async function openSourceLocation(file, line) {
   elements.sourceEditor.setSelectionRange(start, end);
   const lineHeight = Number.parseFloat(getComputedStyle(elements.sourceEditor).lineHeight) || 20;
   elements.sourceEditor.scrollTop = Math.max(0, (targetLine - 5) * lineHeight);
-  elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
+  syncSourceEditorLayers();
   flashSourceSelection();
   updateSourceStatus();
   return true;
@@ -3933,16 +4252,38 @@ async function diagnoseBuild(build) {
 
 function updateBuild(build) {
   if (!build) return;
-  if (typeof build.previewAvailable === "boolean") state.buildPreviewAvailable = build.previewAvailable;
+  const failed = !build.success && !build.skipped;
+  if (failed) state.buildPreviewAvailable = false;
+  else if (typeof build.previewAvailable === "boolean") state.buildPreviewAvailable = build.previewAvailable;
+  if (state.project && !build.skipped) {
+    state.project.lastBuild = {
+      success: Boolean(build.success),
+      previewAvailable: Boolean(build.previewAvailable),
+      recoverable: Boolean(build.recoverable),
+      errors: build.errors || [],
+      warnings: build.warnings || [],
+      locations: build.locations || [],
+      engine: build.engine || "",
+      mode: build.mode || "",
+      pdf: build.pdf || null,
+      updatedAt: new Date().toISOString()
+    };
+  }
   if (build.pdf) {
     state.project.pdf = build.pdf;
-    if (state.previewMode === "pdf") updatePdf(build.pdf);
+    if (state.previewMode === "pdf" && !failed) updatePdf(build.pdf);
   }
   updateWarnings(build.warnings || [], build.layoutChanges || [], build.errors || []);
-  if (!build.success && !build.skipped) {
-    toast("编译失败，AI 正在定位错误。", "error", 5200);
+  if (failed) {
+    invalidatePdfNavigationIndex();
+    renderCompileFailure(build);
+    state.dismissedBuildDrawerFingerprint = "";
+    elements.buildDrawer.classList.remove("hidden");
+    const reason = String(build.errors?.[0] || "LaTeX 编译器没有生成可用 PDF").replace(/\s+/g, " ").slice(0, 180);
+    toast(`编译失败：${reason}`, "error", 7600);
     void diagnoseBuild(build);
   } else if (build.success && !build.skipped) {
+    elements.previewPanel.classList.remove("compile-failed", "compile-running");
     clearCompileDiagnosis();
   }
 }
@@ -3968,6 +4309,11 @@ async function refreshProject({ preserveDocument = true, remoteName = state.gitR
     state.fastPreviewCache = [];
     invalidateReferences();
     clearCompileDiagnosis();
+  }
+  if (state.project.lastBuild && typeof state.project.lastBuild.previewAvailable === "boolean") {
+    state.buildPreviewAvailable = state.project.lastBuild.success === false
+      ? false
+      : state.project.lastBuild.previewAvailable;
   }
   if (state.project.setupRequired) {
     openSetup(state.project);
@@ -4008,6 +4354,11 @@ async function applyProjectPayload(project, { preserveDocument = true } = {}) {
     state.fastPreviewCache = [];
     invalidateReferences();
     clearCompileDiagnosis();
+  }
+  if (state.project.lastBuild && typeof state.project.lastBuild.previewAvailable === "boolean") {
+    state.buildPreviewAvailable = state.project.lastBuild.success === false
+      ? false
+      : state.project.lastBuild.previewAvailable;
   }
   updateProjectHeader();
   renderDocumentList();
@@ -4078,7 +4429,6 @@ function attachMathDropTarget(row, target) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      scheduleProjectRefresh();
       toast("公式块已移动。", "success");
     } catch (error) {
       toast(error.message, "error", 5600);
@@ -4217,7 +4567,6 @@ async function runSegmentTranslationJob(job) {
     }
     updateBuild(result.build);
     invalidateReferences();
-    scheduleProjectRefresh();
     if (result.build && !result.build.skipped) {
       setFileTranslationProgress(2, 2, result.build.success ? `${segmentTranslationLabel(job)} · 英文与 PDF 已更新` : `${segmentTranslationLabel(job)} · 英文已写入 TeX，但编译存在错误`, result.build.success ? "" : "error");
       toast(result.build.success ? `${segmentTranslationLabel(job)} 英文段落和 PDF 已更新。` : `${segmentTranslationLabel(job)} 英文段落已写入 TeX，但 PDF 编译存在错误。`, result.build.success ? "success" : "error", 5600);
@@ -4338,7 +4687,6 @@ function createSegmentRow(segment) {
       });
       state.currentDocument = result.document;
       renderSegments();
-      scheduleProjectRefresh();
       const translated = result.progress?.translated || 0;
       setFileTranslationProgress(1, 1, translated ? "本段中文已生成" : "模型未返回本段翻译", translated ? "" : "warning");
       toast(translated ? "已仅翻译当前段落。" : "模型没有返回当前段落的有效中文翻译。", translated ? "success" : "error", 5200);
@@ -4404,7 +4752,6 @@ function createSegmentRow(segment) {
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
       invalidateReferences();
-      scheduleProjectRefresh();
       toast("本段已注释，TeX 源码仍然保留。", "success", 4600);
     } catch (error) {
       toast(error.message, "error", 5600);
@@ -4454,7 +4801,6 @@ function createSegmentRow(segment) {
 
     const deferCompile = state.project?.config?.autoCompile !== true;
     const requestedEnglish = english.value;
-    let forceRetry = false;
     let saved = false;
     englishSaveInFlight = true;
     setBusy(saveEnglishButton, true);
@@ -4479,7 +4825,6 @@ function createSegmentRow(segment) {
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
       invalidateReferences();
-      scheduleProjectRefresh();
       if (english.value === requestedEnglish) {
         english.classList.remove("changed");
         status.textContent = automatic ? "英文已自动保存" : statusLabel(nextSegment?.translationStatus || segment.translationStatus);
@@ -4495,27 +4840,16 @@ function createSegmentRow(segment) {
       }
       saved = true;
     } catch (error) {
-      if (error.status === 409 && error.payload?.code === "LATEX_TOKEN_LOSS" && !force) {
-        const missingTokens = error.payload.details?.missingTokens || [];
-        const confirmed = window.confirm(`修改删除了 LaTeX 标记：\n${missingTokens.join("\n")}\n\n如果这是你主动删除的内容，可以继续保存。仍然写入 TeX 吗？`);
-        if (confirmed) {
-          forceRetry = true;
-        } else {
-          markEnglishChanged("英文未保存：等待确认");
-        }
-      } else {
-        markEnglishChanged("英文保存失败");
-        toast(error.message, "error", 5200);
-      }
+      markEnglishChanged("英文保存失败");
+      toast(error.message, "error", 5200);
     } finally {
       englishSaveInFlight = false;
       setBusy(saveEnglishButton, false);
-      if (!forceRetry && englishSavePending) {
+      if (englishSavePending) {
         englishSavePending = false;
         scheduleEnglishAutosave(250);
       }
     }
-    if (forceRetry) return saveEnglish(true, { automatic });
     return saved;
   }
 
@@ -4660,7 +4994,6 @@ function createMathBlockRow(block) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      scheduleProjectRefresh();
       toast(
         result.build && !result.build.skipped
           ? result.build.success ? "公式已保存，PDF 已更新。" : "公式已保存，但编译仍有错误。"
@@ -4871,7 +5204,6 @@ function createTableBlockRow(block) {
       renderSegments();
       scheduleFastPreview(result.document.file, 0);
       updateBuild(result.build);
-      scheduleProjectRefresh();
       toast("表格已保存。", "success");
     } catch (error) {
       toast(error.message, "error", 5600);
@@ -4910,29 +5242,16 @@ async function submitNewParagraph(event) {
   const position = document.querySelector('input[name="newParagraphPosition"]:checked').value;
   setBusy(button, true);
   try {
-    let approvalToken = "";
-    let result;
-    while (!result) {
-      try {
-        result = await api("/api/segment/add", {
-          method: "POST",
-          body: JSON.stringify({
-            file: anchor.file,
-            index: anchor.index,
-            sourceHash: anchor.sourceHash,
-            chinese,
-            position,
-            approvalToken
-          })
-        });
-      } catch (error) {
-        if (confirmUnexpectedLatexCommands(error)) {
-          approvalToken = error.payload.details.approvalToken;
-          continue;
-        }
-        throw error;
-      }
-    }
+    const result = await api("/api/segment/add", {
+      method: "POST",
+      body: JSON.stringify({
+        file: anchor.file,
+        index: anchor.index,
+        sourceHash: anchor.sourceHash,
+        chinese,
+        position
+      })
+    });
     state.currentDocument = result.document;
     closeParagraphDialog();
     renderSegments();
@@ -4942,15 +5261,10 @@ async function submitNewParagraph(event) {
     scheduleProjectRefresh();
     toast("新段落已生成并插入。", "success");
   } catch (error) {
-    const missing = error.payload?.details?.missingTokens;
     toast(
-      missing?.length
-        ? `模型丢失 LaTeX 标记：${missing.join(", ")}`
-        : error.payload?.code === "DANGEROUS_LATEX_COMMANDS"
-          ? dangerousLatexMessage(error)
-          : error.payload?.code === "INVALID_PARAGRAPH"
-            ? "AI 没有返回可插入的英文正文段落，请重试或把新增内容写成一个完整段落。"
-          : error.message,
+      error.payload?.code === "INVALID_PARAGRAPH"
+        ? "AI 没有返回可插入的英文正文段落，请重试或把新增内容写成一个完整段落。"
+        : error.message,
       "error",
       6200
     );
@@ -5203,6 +5517,7 @@ function renderSegments() {
 
 async function loadDocument(file) {
   state.currentFile = file;
+  updateTopbarCurrentFile(file);
   state.currentDocument = null;
   state.currentSectionId = null;
   renderFileTranslationProgress(file);
@@ -5224,14 +5539,15 @@ async function loadDocument(file) {
 
 function ensureSourceSearchControls() {
   if (elements.sourceSearchInput) return;
-  const toolbar = elements.sourceFileSelect.closest(".toolbar-actions");
+  const toolbar = document.querySelector(".source-tool-fields")
+    || elements.sourceFileSelect.closest(".toolbar-actions");
   const search = document.createElement("div");
   search.className = "source-search";
   search.setAttribute("role", "search");
   search.innerHTML = `
     <i data-lucide="search"></i>
-    <input id="sourceSearchInput" type="search" autocomplete="off" placeholder="搜索 TeX 源码" disabled>
-    <span id="sourceSearchCount">0 / 0</span>
+    <input id="sourceSearchInput" type="search" autocomplete="off" aria-label="搜索当前 TeX 源码" placeholder="搜索当前文件" disabled>
+    <span id="sourceSearchCount" aria-live="polite">0 / 0</span>
     <button class="icon-button small" id="sourceSearchPreviousButton" type="button" title="上一个匹配" disabled>
       <i data-lucide="chevron-up"></i>
     </button>
@@ -5239,7 +5555,7 @@ function ensureSourceSearchControls() {
       <i data-lucide="chevron-down"></i>
     </button>
   `;
-  toolbar.insertBefore(search, elements.sourceFileSelect);
+  toolbar.append(search);
   elements.sourceSearchInput = search.querySelector("#sourceSearchInput");
   elements.sourceSearchCount = search.querySelector("#sourceSearchCount");
   elements.sourceSearchPreviousButton = search.querySelector("#sourceSearchPreviousButton");
@@ -5248,6 +5564,92 @@ function ensureSourceSearchControls() {
 
 function sourceLineCount() {
   return elements.sourceEditor.value.split(/\r?\n/).length;
+}
+
+function sourceSyntaxEscape(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function latexSourceHighlightHtml(value) {
+  const source = String(value || "").replace(/\r\n/g, "\n");
+  let html = "";
+  let cursor = 0;
+  let mathMarker = "";
+  const append = (className, token) => {
+    const escaped = sourceSyntaxEscape(token);
+    html += className ? `<span class="${className}">${escaped}</span>` : escaped;
+  };
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (char === "%" && !fastPreviewIsEscaped(source, cursor)) {
+      const end = source.indexOf("\n", cursor);
+      const commentEnd = end < 0 ? source.length : end;
+      append("syntax-comment", source.slice(cursor, commentEnd));
+      cursor = commentEnd;
+      continue;
+    }
+    if (char === "\\") {
+      const command = source.slice(cursor).match(/^\\(?:[A-Za-z@]+\*?|.)/)?.[0] || "\\";
+      append("syntax-command", command);
+      cursor += command.length;
+      continue;
+    }
+    if (char === "$" && !fastPreviewIsEscaped(source, cursor)) {
+      const marker = source.startsWith("$$", cursor) ? "$$" : "$";
+      append("syntax-math-delimiter", marker);
+      mathMarker = mathMarker === marker ? "" : marker;
+      cursor += marker.length;
+      continue;
+    }
+    if (char === "@" && /^(?:@[A-Za-z]+)/.test(source.slice(cursor))) {
+      const token = source.slice(cursor).match(/^@[A-Za-z]+/)?.[0] || "@";
+      append("syntax-bib-type", token);
+      cursor += token.length;
+      continue;
+    }
+    const linePrefix = source.slice(source.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1, cursor);
+    if (!mathMarker && /^[\t ]*$/.test(linePrefix)) {
+      const field = source.slice(cursor).match(/^[A-Za-z][A-Za-z0-9_-]*(?=\s*=)/)?.[0];
+      if (field) {
+        append("syntax-bib-field", field);
+        cursor += field.length;
+        continue;
+      }
+    }
+    if ("{}[]".includes(char)) {
+      append("syntax-brace", char);
+      cursor += 1;
+      continue;
+    }
+    if (/\d/.test(char)) {
+      const number = source.slice(cursor).match(/^\d+(?:\.\d+)?/)?.[0] || char;
+      append(mathMarker ? "syntax-math" : "syntax-number", number);
+      cursor += number.length;
+      continue;
+    }
+    const specials = ["%", "\\", "$", "@", "{", "}", "[", "]"];
+    let end = cursor + 1;
+    while (end < source.length && !specials.includes(source[end]) && !/\d/.test(source[end])) end += 1;
+    append(mathMarker ? "syntax-math" : "", source.slice(cursor, end));
+    cursor = end;
+  }
+  return `${html}\u200b`;
+}
+
+function updateSourceSyntaxHighlight() {
+  const code = elements.sourceHighlightLayer?.querySelector("code");
+  if (!code) return;
+  code.innerHTML = latexSourceHighlightHtml(elements.sourceEditor.value);
+}
+
+function syncSourceEditorLayers() {
+  if (!elements.sourceHighlightLayer) return;
+  elements.sourceHighlightLayer.scrollTop = elements.sourceEditor.scrollTop;
+  elements.sourceHighlightLayer.scrollLeft = elements.sourceEditor.scrollLeft;
+  elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
 }
 
 function sourceCursorPosition() {
@@ -5262,6 +5664,7 @@ function sourceCursorPosition() {
 function updateSourceLineNumbers() {
   const count = sourceLineCount();
   elements.sourceLineNumbers.textContent = Array.from({ length: count }, (_value, index) => index + 1).join("\n");
+  updateSourceSyntaxHighlight();
 }
 
 function toggleSourceLineComments() {
@@ -5292,15 +5695,17 @@ function updateSourceStatus() {
   if (!state.sourceFile || elements.sourceEditor.disabled) return;
   const lines = sourceLineCount();
   const cursor = sourceCursorPosition();
-  const saved = state.sourceDirty ? "有未保存修改" : "已保存";
-  elements.sourceStatus.textContent = `${lines} 行 · 第 ${cursor.line} 行，第 ${cursor.column} 列 · ${saved}`;
+  elements.sourceStatus.textContent = state.sourceSaveInFlight ? "自动保存中" : state.sourceDirty ? "等待自动保存" : "已自动保存";
+  elements.sourceStatus.title = `${lines} 行 · 第 ${cursor.line} 行，第 ${cursor.column} 列`;
 }
 
 function setSourceDirty(dirty) {
   state.sourceDirty = dirty;
+  elements.sourceStatus.classList.toggle("clean", !dirty && Boolean(state.sourceFile));
   elements.sourceStatus.classList.toggle("dirty", dirty);
   elements.sourceStatus.classList.remove("error");
   elements.saveSourceButton.disabled = !dirty;
+  updateHeaderSaveState(dirty ? "dirty" : "saved");
   updateSourceStatus();
 }
 
@@ -5354,7 +5759,7 @@ function selectSourceSearchMatch(index) {
   const lineHeight = Number.parseFloat(getComputedStyle(elements.sourceEditor).lineHeight) || 20;
   const line = elements.sourceEditor.value.slice(0, match.start).split(/\r?\n/).length;
   elements.sourceEditor.scrollTop = Math.max(0, (line - 4) * lineHeight);
-  elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
+  syncSourceEditorLayers();
   elements.sourceSearchCount.textContent = `${state.sourceSearchIndex + 1} / ${matches.length}`;
   flashSourceSelection();
   updateSourceStatus();
@@ -5410,8 +5815,10 @@ function renderSourceFileOptions(preferredFile = "") {
     state.sourceSearchMatches = [];
     state.sourceSearchIndex = -1;
     if (elements.sourceSearchCount) elements.sourceSearchCount.textContent = "0 / 0";
+    elements.sourceStatus.classList.remove("clean", "dirty", "error");
     elements.sourceStatus.textContent = "没有可编辑的源码文件";
     elements.saveSourceButton.disabled = true;
+    updateSourceSyntaxHighlight();
   }
   const structure = state.project?.structure;
   elements.modularizeButton.title = structure?.eligible
@@ -5422,8 +5829,9 @@ function renderSourceFileOptions(preferredFile = "") {
 async function loadSourceFile(file, { force = false } = {}) {
   if (!file) return false;
   if (!force && file !== state.sourceFile && !confirmDiscardSourceChanges()) return false;
-  elements.sourceStatus.classList.remove("dirty", "error");
+  elements.sourceStatus.classList.remove("clean", "dirty", "error");
   elements.sourceStatus.textContent = "正在读取源码...";
+  updateTopbarCurrentFile(file);
   elements.sourceEditor.disabled = true;
   try {
     const source = await api(`/api/source?file=${encodeURIComponent(file)}`);
@@ -5435,14 +5843,17 @@ async function loadSourceFile(file, { force = false } = {}) {
     elements.sourceEditor.value = source.content;
     state.sourceSavedContent = elements.sourceEditor.value;
     elements.sourceEditor.disabled = false;
+    updateTopbarCurrentFile(source.file);
     updateSourceLineNumbers();
     setSourceDirty(false);
     refreshSourceSearch();
     if (state.previewMode === "fast" && source.file.toLowerCase().endsWith(".tex")) scheduleFastPreview(source.file, 0);
     return true;
   } catch (error) {
+    elements.sourceStatus.classList.remove("clean", "dirty");
     elements.sourceStatus.classList.add("error");
     elements.sourceStatus.textContent = "源码读取失败";
+    updateHeaderSaveState("error");
     toast(error.message, "error", 5200);
     return false;
   }
@@ -5490,7 +5901,11 @@ async function saveSourceFile(options = {}) {
   const requestedHash = state.sourceHash;
   const button = elements.saveSourceButton;
   let saveSucceeded = false;
+  let saveFailed = false;
   state.sourceSaveInFlight = true;
+  elements.sourceStatus.classList.add("saving");
+  updateSourceStatus();
+  updateHeaderSaveState("saving");
   setBusy(button, true);
   try {
     const result = await api("/api/source", {
@@ -5539,15 +5954,23 @@ async function saveSourceFile(options = {}) {
       const reload = window.confirm("该源码文件已在其他位置发生变化。是否放弃当前修改并重新载入？");
       if (reload) await loadSourceFile(state.sourceFile, { force: true });
     } else {
+      saveFailed = true;
       elements.sourceStatus.classList.add("error");
       elements.sourceStatus.textContent = "保存失败 · 修改仍保留在编辑器中";
+      updateHeaderSaveState("error");
       toast(error.message, "error", 6200);
     }
     return false;
   } finally {
     state.sourceSaveInFlight = false;
     setBusy(button, false);
+    elements.sourceStatus.classList.remove("saving");
     setSourceDirty(elements.sourceEditor.value !== state.sourceSavedContent);
+    if (saveFailed) {
+      elements.sourceStatus.classList.add("error");
+      elements.sourceStatus.textContent = "自动保存失败";
+      updateHeaderSaveState("error");
+    }
     if (saveSucceeded && (state.sourceSavePending || state.sourceDirty)) {
       state.sourceSavePending = false;
       scheduleSourceAutosave(220);
@@ -5618,6 +6041,7 @@ async function createTexFile(event) {
     : { mode: selected === "end" ? "end" : "none", sourceHash: elements.createTexDialog.dataset.mainSourceHash || "" };
   setBusy(elements.submitCreateTexButton, true);
   setBusy(elements.createTexFileButton, true);
+  setBusy(elements.sourceCreateTexButton, true);
   try {
     const result = await api("/api/source/create", {
       method: "POST",
@@ -5635,6 +6059,7 @@ async function createTexFile(event) {
   } finally {
     setBusy(elements.submitCreateTexButton, false);
     setBusy(elements.createTexFileButton, false);
+    setBusy(elements.sourceCreateTexButton, false);
   }
 }
 
@@ -5794,21 +6219,30 @@ async function compilePaper() {
   }
   const buttons = [document.querySelector("#compileButton"), elements.previewCompileButton];
   buttons.forEach((button) => setBusy(button, true));
+  const previousPreviewAvailable = state.buildPreviewAvailable;
+  const previousBuild = state.project?.lastBuild || null;
+  state.compileInFlight = true;
+  renderCompileProgress();
   try {
-    setPreviewMode("pdf");
     const build = await api("/api/compile", { method: "POST", body: "{}" });
+    state.compileInFlight = false;
     updateBuild(build);
     await refreshProject();
     const warningCount = build.warnings?.length || 0;
-    toast(
-      build.success
-        ? warningCount ? `英文 PDF 已生成，包含 ${warningCount} 条编译警告。` : "英文 PDF 已重新编译。"
-        : "编译失败。",
-      build.success ? "success" : "error"
-    );
+    if (build.success) {
+      toast(
+        warningCount ? `英文 PDF 已生成，包含 ${warningCount} 条编译警告。` : "英文 PDF 已重新编译。",
+        "success"
+      );
+    }
   } catch (error) {
+    state.compileInFlight = false;
+    state.buildPreviewAvailable = previousPreviewAvailable;
+    if (state.project) state.project.lastBuild = previousBuild;
+    updatePdf();
     toast(error.message, "error");
   } finally {
+    state.compileInFlight = false;
     buttons.forEach((button) => setBusy(button, false));
   }
 }
@@ -6110,8 +6544,9 @@ async function translateCurrentFile() {
     });
     job.label = `${currentFileLabel} · 术语表 ${terminology.entries?.length || 0} 条，正在准备翻译...`;
     renderFileTranslationProgress(translationFile);
-    for (let offset = 0; offset < pendingIds.length; offset += 1) {
-      const segmentIds = pendingIds.slice(offset, offset + 1);
+    const batchSize = 8;
+    for (let offset = 0; offset < pendingIds.length; offset += batchSize) {
+      const segmentIds = pendingIds.slice(offset, offset + batchSize);
       const end = Math.min(offset + segmentIds.length, total);
       job.label = `${currentFileLabel} · 正在翻译第 ${offset + 1}-${end} 段...`;
       renderFileTranslationProgress(translationFile);
@@ -6480,6 +6915,17 @@ async function applyTargetFormat() {
 }
 
 async function exportPdf() {
+  if (state.compileInFlight || state.buildPreviewAvailable === false) {
+    elements.buildDrawer.classList.remove("hidden");
+    toast(
+      state.compileInFlight
+        ? "PDF 仍在编译，完成后才能导出。"
+        : "本次编译失败，旧 PDF 已停用，不能导出。请先修复错误并重新编译。",
+      "error",
+      5200
+    );
+    return;
+  }
   const name = state.project?.config?.mainTex?.replace(/\.tex$/i, ".pdf") || "paper.pdf";
   const exportToken = ++state.pdfExportToken;
   const previousStatus = elements.pageStatus.textContent;
@@ -6529,6 +6975,7 @@ function updateModeButtons() {
 
 function setReferencesOpen(open) {
   state.referencesOpen = Boolean(open);
+  if (state.referencesOpen) setSourceFocus(false);
   elements.workspace.classList.toggle("references-open", state.referencesOpen);
   elements.referencesView.classList.toggle("hidden", !state.referencesOpen);
   elements.previewPanel.classList.toggle("hidden", state.referencesOpen);
@@ -6537,8 +6984,22 @@ function setReferencesOpen(open) {
   return true;
 }
 
+function setSourceFocus(focused) {
+  const active = Boolean(focused) && state.mode === "source";
+  elements.workspace.classList.toggle("source-focused", active);
+  if (!elements.sourceFocusButton) return;
+  elements.sourceFocusButton.setAttribute("aria-pressed", String(active));
+  elements.sourceFocusButton.title = active ? "退出专注编辑" : "专注编辑源码";
+  elements.sourceFocusButton.setAttribute("aria-label", elements.sourceFocusButton.title);
+  const icon = elements.sourceFocusButton.querySelector("[data-lucide], svg");
+  if (icon) icon.setAttribute("data-lucide", active ? "minimize-2" : "maximize-2");
+  refreshIcons();
+}
+
 function setMode(mode, { loadCurrent = true } = {}) {
   if (mode === "references") return setReferencesOpen(!state.referencesOpen);
+  if (mode === "format") return false;
+  if (state.referencesOpen) setReferencesOpen(false);
   if (state.mode === "source" && mode !== "source" && state.sourceDirty) {
     if (!confirmDiscardSourceChanges()) return false;
     elements.sourceEditor.value = state.sourceSavedContent;
@@ -6546,16 +7007,16 @@ function setMode(mode, { loadCurrent = true } = {}) {
     setSourceDirty(false);
   }
   state.mode = mode;
+  if (mode !== "source") setSourceFocus(false);
   updateModeButtons();
   elements.editView.classList.toggle("hidden", mode !== "edit");
   elements.sourceView.classList.toggle("hidden", mode !== "source");
-  elements.formatView.classList.toggle("hidden", mode !== "format");
+  elements.formatView.classList.add("hidden");
   if (mode === "source") {
     renderSourceFileOptions(loadCurrent ? state.currentFile : state.sourceFile);
     if (loadCurrent) void loadSourceFile(elements.sourceFileSelect.value, { force: true });
   }
   if (mode === "edit" && state.currentFile && loadCurrent) void loadDocument(state.currentFile);
-  if (mode === "format") loadLatestFormatJob();
   return true;
 }
 
@@ -7042,7 +7503,7 @@ function bindEvents() {
   });
   document.querySelector("#refreshPdfButton").addEventListener("click", () => {
     if (state.previewMode === "fast") void renderFastPreview(state.fastPreviewFile || state.currentDocument?.file || "");
-    else void renderPdf();
+    else updatePdf();
   });
   elements.exportPdfButton.addEventListener("click", exportPdf);
   document.querySelector("#previousPageButton").addEventListener("click", () => movePdfPage(-1));
@@ -7070,7 +7531,7 @@ function bindEvents() {
     }
   });
   elements.sourceEditor.addEventListener("scroll", () => {
-    elements.sourceLineNumbers.scrollTop = elements.sourceEditor.scrollTop;
+    syncSourceEditorLayers();
   }, { passive: true });
   attachCitationTarget(elements.sourceEditor);
   elements.sourceEditor.addEventListener("click", updateSourceStatus);
@@ -7135,6 +7596,10 @@ function bindEvents() {
   });
   elements.saveSourceButton.addEventListener("click", () => saveSourceFile());
   elements.createTexFileButton.addEventListener("click", openCreateTexDialog);
+  elements.sourceCreateTexButton.addEventListener("click", openCreateTexDialog);
+  elements.sourceFocusButton.addEventListener("click", () => {
+    setSourceFocus(!elements.workspace.classList.contains("source-focused"));
+  });
   elements.createTexForm.addEventListener("submit", createTexFile);
   document.querySelector("#closeCreateTexButton").addEventListener("click", closeCreateTexDialog);
   document.querySelector("#cancelCreateTexButton").addEventListener("click", closeCreateTexDialog);
@@ -7163,7 +7628,16 @@ function bindEvents() {
   elements.pdfScroll.addEventListener("wheel", zoomPdfWithWheel, { passive: false });
   elements.pdfScroll.addEventListener("dblclick", (event) => {
     if (state.previewMode === "fast") void locateFastPreviewSelection(event);
-    else void locatePdfSelection(event);
+    else if (state.compileInFlight || state.buildPreviewAvailable === false) {
+      elements.buildDrawer.classList.remove("hidden");
+      toast(
+        state.compileInFlight
+          ? "新的 PDF 仍在编译，暂时不能定位。"
+          : "本次编译失败，旧 PDF 已停用。请点击编译器报告的源码位置。",
+        "error",
+        4200
+      );
+    } else void locatePdfSelection(event);
   });
   elements.pdfScroll.addEventListener("scroll", updateVisiblePdfPage, { passive: true });
   window.addEventListener("resize", () => schedulePdfPanelResize());

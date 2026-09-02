@@ -10,13 +10,18 @@ test("reference workbench preserves the current left editor and supports citatio
   const styles = await fs.readFile(new URL("../public/styles.css", import.meta.url), "utf8");
   const html = await fs.readFile(new URL("../public/index.html", import.meta.url), "utf8");
 
-  assert.match(html, /data-mode="source"[^>]*aria-pressed="true">TeX<\/button>[\s\S]*data-mode="edit"[^>]*>翻译<\/button>[\s\S]*data-mode="references"[^>]*>文献<\/button>[\s\S]*data-mode="format"[^>]*>格式<\/button>/);
+  assert.match(html, /data-mode="source"[^>]*aria-pressed="true">编辑<\/button>[\s\S]*data-mode="edit"[^>]*>翻译<\/button>[\s\S]*data-mode="references"[^>]*>文献<\/button>/);
+  assert.doesNotMatch(html, /data-mode="format"/);
   assert.match(html, /class="editor-panel hidden" id="editView"/);
   assert.match(html, /class="editor-panel source-panel" id="sourceView"/);
   assert.match(appSource, /mode:\s*"source",\s*referencesOpen:\s*false/);
   assert.match(appSource, /if \(mode === "references"\) return setReferencesOpen\(!state\.referencesOpen\)/);
   assert.match(appSource, /function setReferencesOpen\(open\)[\s\S]*state\.referencesOpen = Boolean\(open\)/);
-  assert.doesNotMatch(appSource, /function setReferencesOpen\(open\)[\s\S]{0,500}state\.mode\s*=/);
+  const referenceToggle = appSource.slice(
+    appSource.indexOf("function setReferencesOpen(open)"),
+    appSource.indexOf("function setSourceFocus", appSource.indexOf("function setReferencesOpen(open)"))
+  );
+  assert.doesNotMatch(referenceToggle, /state\.mode\s*=/);
   assert.match(appSource, /elements\.editView\.classList\.toggle\("hidden", mode !== "edit"\)/);
   assert.match(appSource, /elements\.previewPanel\.classList\.toggle\("hidden", state\.referencesOpen\)/);
   assert.match(html, /id="closeReferencesButton"[^>]*aria-label="关闭参考文献，返回 PDF"/);

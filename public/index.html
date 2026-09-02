@@ -11,9 +11,15 @@
   <header class="topbar">
     <div class="brand-block">
       <div class="brand-mark"><img src="/brand-icon.png" alt=""></div>
-      <div>
-        <div class="brand-name">PaperBridge</div>
-        <div class="project-name" id="projectName">Loading project...</div>
+      <div class="brand-name">PaperBridge</div>
+      <span class="topbar-divider" aria-hidden="true"></span>
+      <div class="topbar-context" aria-label="当前项目与文件">
+        <span class="project-name" id="projectName">正在读取项目</span>
+        <i data-lucide="chevron-right"></i>
+        <span class="topbar-current-file" id="topCurrentFile">main.tex</span>
+        <span class="header-save-state" id="headerSaveState">
+          <i data-lucide="circle-check"></i><span>已保存</span>
+        </span>
       </div>
     </div>
 
@@ -50,25 +56,21 @@
   <main class="workspace">
     <aside class="sidebar">
       <div class="mode-switch" role="group" aria-label="工作区">
-        <button class="mode-button active" data-mode="source" type="button" aria-pressed="true">TeX</button>
+        <button class="mode-button active" data-mode="source" type="button" aria-pressed="true">编辑</button>
         <button class="mode-button" data-mode="edit" type="button" aria-pressed="false">翻译</button>
         <button class="mode-button" data-mode="references" type="button" aria-pressed="false">文献</button>
-        <button class="mode-button" data-mode="format" type="button" aria-pressed="false">格式</button>
       </div>
 
       <div class="sidebar-section project-sidebar-section">
         <div class="sidebar-heading">
-          <span>项目</span>
-          <div class="sidebar-heading-actions">
-            <button class="icon-button small" id="addProjectButton" type="button" title="添加或切换论文"><i data-lucide="folder-plus"></i></button>
-          </div>
+          <span>PROJECT</span>
         </div>
         <nav class="project-switch-list" id="sidebarProjectList"></nav>
       </div>
 
       <div class="sidebar-section document-sidebar-section">
         <div class="sidebar-heading">
-          <span>文件</span>
+          <span>DOCUMENTS</span>
           <div class="sidebar-heading-actions">
             <span class="count" id="documentCount">0</span>
             <button class="icon-button small" id="createTexFileButton" type="button" title="新建 TeX 文件"><i data-lucide="file-plus-2"></i></button>
@@ -87,7 +89,24 @@
           <i data-lucide="book-open"></i><span>查看术语表</span>
         </button>
       </div>
+
+      <button class="sidebar-project-switcher" id="projectSwitcherButton" type="button" popovertarget="projectSwitcherPopover" aria-label="打开其他项目">
+        <i data-lucide="panel-left-open"></i><span>打开其他项目</span>
+      </button>
     </aside>
+
+    <div class="project-switcher-popover" id="projectSwitcherPopover" popover="auto">
+      <div class="project-switcher-header">
+        <div>
+          <strong>切换项目</strong>
+          <span>当前项目会保留在最近项目中</span>
+        </div>
+        <button class="button primary" id="addProjectButton" type="button" title="添加新项目">
+          <i data-lucide="folder-plus"></i><span>添加项目</span>
+        </button>
+      </div>
+      <div class="project-switcher-menu" id="projectSwitcherList"></div>
+    </div>
 
     <section class="editor-panel hidden" id="editView">
       <div class="panel-toolbar">
@@ -135,27 +154,45 @@
     </section>
 
     <section class="editor-panel source-panel" id="sourceView">
-      <div class="panel-toolbar source-toolbar">
-        <div>
-          <h1>TeX / Bib 源码</h1>
-          <div class="file-meta source-status" id="sourceStatus">选择文件后可以直接修改</div>
+      <div class="source-titlebar">
+        <h1>TeX / Bib 源码</h1>
+        <button class="icon-button small" id="sourceFocusButton" type="button" title="专注编辑源码" aria-label="专注编辑源码" aria-pressed="false">
+          <i data-lucide="maximize-2"></i>
+        </button>
+      </div>
+      <div class="source-commandbar">
+        <div class="source-file-tabs">
+          <label class="source-file-control source-file-tab" title="选择要编辑的 TeX 或 Bib 文件">
+            <i data-lucide="file-text"></i>
+            <select class="source-file-select" id="sourceFileSelect" aria-label="选择 TeX 或 Bib 源文件"></select>
+          </label>
+          <button class="icon-button source-new-tab-button" id="sourceCreateTexButton" type="button" title="新建 TeX 文件" aria-label="新建 TeX 文件">
+            <i data-lucide="plus"></i>
+          </button>
         </div>
-        <div class="toolbar-actions">
-          <select class="source-file-select" id="sourceFileSelect" aria-label="选择 TeX 或 Bib 源文件"></select>
-          <button class="button secondary" id="insertFigureSourceButton" type="button">
-            <i data-lucide="image-plus"></i><span>插入图片</span>
-          </button>
-          <button class="button secondary" id="modularizeButton" type="button">
-            <i data-lucide="files"></i><span>按章节拆分</span>
-          </button>
-          <button class="button primary" id="saveSourceButton" type="button" title="保存到当前 TeX / Bib 文件" disabled>
-            <i data-lucide="save"></i><span>保存 TeX</span>
-          </button>
+        <div class="source-command-tools">
+          <div class="source-tool-fields">
+          </div>
+          <div class="source-command-group" role="group" aria-label="源码操作">
+            <button class="button secondary" id="insertFigureSourceButton" type="button">
+              <i data-lucide="image-plus"></i><span>插入图片</span>
+            </button>
+            <button class="button secondary" id="modularizeButton" type="button">
+              <i data-lucide="files"></i><span>拆分章节</span>
+            </button>
+            <button class="button primary" id="saveSourceButton" type="button" title="保存到当前 TeX / Bib 文件" disabled>
+              <i data-lucide="save"></i><span>保存 TeX</span>
+            </button>
+          </div>
+          <div class="file-meta source-status" id="sourceStatus" aria-live="polite">选择文件后可以直接修改</div>
         </div>
       </div>
       <div class="source-editor-shell">
         <pre class="source-line-numbers" id="sourceLineNumbers" aria-hidden="true">1</pre>
-        <textarea class="source-editor" id="sourceEditor" aria-label="TeX 或 Bib 源码编辑器" autocomplete="off" autocapitalize="off" spellcheck="false" wrap="soft"></textarea>
+        <div class="source-editor-stage">
+          <pre class="source-highlight-layer" id="sourceHighlightLayer" aria-hidden="true"><code></code></pre>
+          <textarea class="source-editor" id="sourceEditor" aria-label="TeX 或 Bib 源码编辑器" autocomplete="off" autocapitalize="off" spellcheck="false" wrap="soft"></textarea>
+        </div>
       </div>
     </section>
 
@@ -970,7 +1007,7 @@
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title"><i data-lucide="wand-sparkles"></i><span>格式迁移与编译诊断</span></div>
+        <div class="settings-section-title"><i data-lucide="stethoscope"></i><span>编译错误诊断</span></div>
         <div class="provider-grid" data-provider="format"></div>
       </div>
 
@@ -984,7 +1021,7 @@
           <i data-lucide="plug-zap"></i><span>测试翻译接口</span>
         </button>
         <button type="button" class="button secondary" id="testFormatButton">
-          <i data-lucide="plug-zap"></i><span>测试格式接口</span>
+          <i data-lucide="plug-zap"></i><span>测试诊断接口</span>
         </button>
         <button type="submit" class="button primary" value="default">
           <i data-lucide="save"></i><span>保存设置</span>

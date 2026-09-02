@@ -131,6 +131,26 @@ test("TeX source editor soft-wraps long lines without adding a toggle", async ()
   assert.match(styles, /\.source-editor\s*\{[\s\S]*overflow-wrap:\s*anywhere;/);
 });
 
+test("desktop workbench keeps one current project, syntax-highlighted TeX, and a paper-like fast preview", async () => {
+  const [indexHtml, appJs, styles] = await Promise.all([
+    fs.readFile(path.join(process.cwd(), "public", "index.html"), "utf8"),
+    fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8"),
+    fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8")
+  ]);
+
+  assert.match(indexHtml, /id="projectSwitcherButton"[^>]*popovertarget="projectSwitcherPopover"/);
+  assert.match(indexHtml, /id="projectSwitcherPopover"[^>]*popover="auto"/);
+  assert.match(indexHtml, /id="projectSwitcherList"/);
+  assert.match(indexHtml, /id="sourceHighlightLayer"/);
+  assert.match(indexHtml, /id="sourceFocusButton"/);
+  assert.match(appJs, /function renderProjectSwitcherMenu/);
+  assert.match(appJs, /function latexSourceHighlightHtml/);
+  assert.match(appJs, /function fastPreviewPaperHeaderMarkup/);
+  assert.match(styles, /\.syntax-command\s*\{\s*color:\s*var\(--code-command\)/);
+  assert.match(styles, /\.syntax-comment\s*\{\s*color:\s*var\(--code-comment\)/);
+  assert.match(styles, /\.fast-preview-document\s*\{[\s\S]*font-family:\s*var\(--font-paper\)/);
+});
+
 test("TeX source save avoids blocking on a full project refresh", async () => {
   const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
   const serverJs = await fs.readFile(path.join(process.cwd(), "server.js"), "utf8");
@@ -210,9 +230,12 @@ test("paragraph translation clicks enqueue jobs instead of waiting for the curre
   assert.match(queueBlock, /status:\s*"queued"/);
   assert.match(queueBlock, /status = "running"/);
   assert.match(queueBlock, /api\("\/api\/segment\/translate"/);
+  assert.doesNotMatch(queueBlock, /scheduleProjectRefresh/);
+  assert.match(appJs, /const batchSize = 8;/);
+  assert.match(serverJs, /app\.post\("\/api\/segment\/chinese", route\(/);
 });
 
-test("English paragraph edits autosave to TeX and confirm protected LaTeX token deletion", async () => {
+test("English paragraph edits autosave to TeX without blocking LaTeX changes", async () => {
   const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
   const serverJs = await fs.readFile(path.join(process.cwd(), "server.js"), "utf8");
   const createStart = appJs.indexOf("function createSegmentRow");
@@ -232,10 +255,8 @@ test("English paragraph edits autosave to TeX and confirm protected LaTeX token 
   assert.match(saveBlock, /sourceHash:\s*latestSourceHash\(\)/);
   assert.match(saveBlock, /english:\s*requestedEnglish/);
   assert.doesNotMatch(saveBlock, /renderSegments\(\)/);
-  assert.match(saveBlock, /window\.confirm\(`修改删除了 LaTeX 标记/);
-  assert.match(saveBlock, /forceRetry = true/);
-  assert.match(saveBlock, /return saveEnglish\(true,\s*\{\s*automatic\s*\}\)/);
-  assert.match(serverJs, /findMissingProtectedTokens\(segment\.english, segment\.chinese, nextEnglish\)[\s\S]{0,100}\.filter\(\(token\) => !isOptionalTranslationToken\(token\)\)/);
+  assert.doesNotMatch(saveBlock, /LATEX_TOKEN_LOSS|修改删除了 LaTeX 标记|forceRetry/);
+  assert.doesNotMatch(serverJs, /findMissingProtectedTokens\(segment\.english, segment\.chinese, nextEnglish\)/);
 });
 
 test("sidebar owns project switching and new TeX while source view follows the selected document", async () => {
@@ -337,6 +358,24 @@ test("PDF double-click navigation constrains matches by page text and source ord
   assert.match(locateBlock, /findBestNavigationMatch\(query\.context,\s*query\.selectedText,\s*await getPdfParagraphIndex\(\),\s*navigationScope\)/);
 });
 
+test("failed compilation replaces stale PDF navigation with visible source-linked errors", async () => {
+  const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
+  const updateStart = appJs.indexOf("function updateBuild(build)");
+  const updateBlock = appJs.slice(updateStart, appJs.indexOf("async function refreshProject", updateStart));
+  const locateStart = appJs.indexOf("async function locatePdfSelection(");
+  const locateBlock = appJs.slice(locateStart, appJs.indexOf("async function locateFastPreviewSelection", locateStart));
+
+  assert.match(appJs, /function renderCompileFailure/);
+  assert.match(appJs, /function renderCompileProgress/);
+  assert.match(updateBlock, /if \(failed\) state\.buildPreviewAvailable = false/);
+  assert.match(updateBlock, /renderCompileFailure\(build\)/);
+  assert.match(updateBlock, /elements\.buildDrawer\.classList\.remove\("hidden"\)/);
+  assert.match(locateBlock, /state\.compileInFlight \|\| state\.buildPreviewAvailable === false/);
+  assert.match(styles, /\.compile-failure-preview/);
+  assert.match(styles, /\.preview-panel\.compile-failed[\s\S]*#exportPdfButton/);
+});
+
 test("TeX source navigation and search visibly pulse the located selection", async () => {
   const appJs = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
   const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
@@ -350,4 +389,7 @@ test("TeX source navigation and search visibly pulse the located selection", asy
   assert.match(searchBlock, /setSelectionRange\(match\.start,\s*match\.end\)[\s\S]*flashSourceSelection\(\)/);
   assert.match(styles, /\.source-editor\.source-located/);
   assert.match(styles, /@keyframes sourceLocatedPulse/);
+  assert.match(styles, /\.segment-row\.pdf-located[\s\S]*animation:\s*pdf-located-pulse\s*2\.2s/);
+  assert.match(styles, /15%,\s*20%,\s*45%,\s*50%\s*\{[\s\S]*?background:/);
+  assert.match(styles, /@keyframes fast-preview-located-pulse/);
 });

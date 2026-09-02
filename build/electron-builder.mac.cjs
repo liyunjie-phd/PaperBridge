@@ -1,6 +1,14 @@
 const packageJson = require("../package.json");
+const productVersions = require("../product-versions.json");
 
 const build = JSON.parse(JSON.stringify(packageJson.build));
+
+// macOS has its own release sequence.  Keep the Windows version in the root
+// package.json, but override the packaged app metadata for this target.
+build.extraMetadata = {
+  ...(build.extraMetadata || {}),
+  version: productVersions.macos.version
+};
 
 build.directories = {
   ...(build.directories || {}),

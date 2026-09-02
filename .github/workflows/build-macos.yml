@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "v*"
+      - "macos-v*"
 
 permissions:
   contents: read
@@ -37,6 +37,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Check product versions
+        run: npm run versions:check
+
+      - name: Verify macOS release tag
+        if: github.ref_type == 'tag'
+        run: node scripts/product-version.mjs check-tag macos "${{ github.ref_name }}"
 
       - name: Add bundled Tectonic
         shell: bash

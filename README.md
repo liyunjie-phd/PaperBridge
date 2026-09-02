@@ -12,12 +12,25 @@ PaperBridge 不代替作者决定论文内容。它用于保持中文修改、�
 ## 主要功能
 
 1. **翻译维护**：导入 ZIP 或本地项目时，自动排除导言区、作者信息、宏定义、公式、图表、算法代码和参考文献等非翻译内容；按段落维护中文工作稿和英文 LaTeX，只翻译指定段落或章节。
-2. **格式调整**：根据文字要求或 Word、PDF、TeX、ZIP 模板分析格式差异并迁移论文格式；写入前检查危险 LaTeX 命令、正文完整性、引用、标签和图片路径，关键操作失败时自动恢复。
+2. **格式调整**：根据文字要求或 Word、PDF、TeX、ZIP 模板分析格式差异并迁移论文格式；修改直接写入，编译时集中反馈错误，关键操作失败时自动恢复。
 3. **版本维护**：支持 Overleaf Git，以及 GitHub、GitLab 等 HTTPS Git 仓库的拉取和推送；支持 OpenAI 兼容接口、DeepSeek、Anthropic 和 Gemini，并可分别配置翻译模型与格式诊断模型。
 
 ## 安装
 
-Windows 只提供一个完整安装版：[下载 PaperBridge 0.4.3 Windows 安装程序](https://github.com/liyunjie-phd/PaperBridge/releases/tag/v0.4.3)。
+Windows 桌面版是当前主线，只提供一个完整安装版。请在 [GitHub Releases](https://github.com/liyunjie-phd/PaperBridge/releases) 中选择名称以 `windows-v` 开头的 release 下载；Windows 的开发和发布优先级最高。
+
+### 四条产品线的版本
+
+网页版、PBLaTex 插件、Windows 桌面版和 macOS 桌面版各自维护版本号，不再共用一个 `v*` 版本。当前版本记录在 [product-versions.json](product-versions.json) 中：
+
+| 产品线 | 当前版本 | 发布 tag 前缀 | 说明 |
+| --- | --- | --- | --- |
+| Windows | 0.5.0 | `windows-v` | 主线，优先更新和发布 |
+| macOS | 0.1.0 | `macos-v` | 独立的 DMG / ZIP 构建 |
+| Web | 0.1.0 | `web-v` | 网页网关测试版本 |
+| PBLaTex | 0.1.0 | `pblatex-v` | VS Code 增强插件 |
+
+例如，Windows 发布使用 `windows-v0.4.3`，macOS 发布使用 `macos-v0.1.1`；一个产品线的版本更新不会改变其他产品线的版本。构建前可运行 `npm run versions:check` 检查版本是否一致，使用 `npm run versions:set -- <product> <version>` 更新指定产品线。
 
 本次版本新增参考文献工作台：可以通过 DOI、doi.org 链接或论文网页自动生成 BibTeX，自动建议 `author_year_keyword` 形式的 citation key，识别重复文献，并在写入前预览和修改 BibTeX。工作台也支持搜索、查看字段解释以及直接插入正文引用。
 
@@ -91,13 +104,14 @@ API Key 只应保存在自己的电脑中，不要提交到 GitHub，也不要�
 
 PaperBridge 目前支持 HTTPS 仓库，不支持 SSH 地址。公开仓库可以不填写 Token；私有仓库需要 Git 用户名和 Personal Access Token。Token 在 Windows 本地加密保存，不会写入论文目录或 Git 远端地址。
 
-如果远端仓库已经存在与本地无关的提交历史，PaperBridge 会拒绝覆盖。此时应从 **Git 仓库** 来源克隆远端，再手动合并论文文件，而不是将本地项目直接推送到该仓库。
+如果远端仓库已有内容，PaperBridge 仍可以直接推送本地 ZIP 或文件夹项目：同名文件以当前本地版本更新，远端独有文件保留，不会生成重复路径。首次推送仍会显示文件清单，需确认要上传的论文文件。
 
 ## 日常论文修改工作流
 
 1. **导入并检查项目**：选择论文来源和主 TeX 文件，先确认项目可以正常编译并显示 PDF。
 2. **准备中文工作稿**：选择当前 TeX 文件中的章节批量生成中文，或者只点击某个段落的语言按钮。已有中文的段落不会重复调用接口。
 3. **逐段修改**：在左侧修改中文，点击右箭头只更新当前段落的英文 LaTeX。也可以新增或删除段落，或者直接修改右侧英文。
+   翻译和英文编辑会按用户输入直接写入 LaTeX，不再因为命令、引用、公式或标记的新增、删除、变更而拦截；语法问题统一在编译时显示。
 4. **随时检查排版**：以右侧 PDF 为准检查页数、换页、公式、引用、图片和表格位置。双击 PDF 文字可以返回对应段落；找不到翻译段落时会打开 TeX 源码。
 5. **处理简单源码问题**：进入 **TeX** 页面编辑当前项目引用的 `.tex` 和 `.bib` 文件，使用 `Ctrl+S` 保存并重新编译。每个源码文件最多保留最近 3 份备份。
 6. **处理编译错误**：打开右侧编译信息，查看 AI 给出的文件、行号、原因和建议；点击位置后人工确认并修改源码。相同错误会复用本地诊断缓存。
@@ -168,7 +182,7 @@ flowchart LR
 模型返回的每项修改都必须通过本地校验：
 
 - 定位文本必须存在且唯一，不能依靠模糊替换大段源码。
-- 危险 LaTeX 命令会被直接拦截；新增非预期命令时必须人工确认。
+- 翻译、英文编辑和格式迁移都按用户输入直接写入，不再因为 LaTeX 命令、引用、公式或标记的新增、删除、变更而拦截；语法问题统一在编译时显示。
 - 正文、引用、标签、公式环境和图片路径不能无故丢失。
 - 局部章节不能擅自加入只应出现在主文件中的全局命令。
 
@@ -229,7 +243,7 @@ npm run desktop
 生成 Windows 完整安装版：
 
 ```powershell
-npm run build:setup
+npm run build:windows
 ```
 
 ## macOS 版本
@@ -240,7 +254,7 @@ PaperBridge 也提供 macOS 构建版本，支持 Intel (`x64`) 和 Apple Silico
 
 在 GitHub 仓库的 **Actions > Build PaperBridge for macOS > Run workflow** 中手动启动构建。完成后，在对应的 workflow run 页面下载 `PaperBridge-mac-x64` 或 `PaperBridge-mac-arm64` artifact，其中包含 DMG 和 ZIP。
 
-也可以推送一个 `v*` 格式的 tag 自动触发构建。当前构建未配置 Apple Developer 签名和公证；首次打开时如果 macOS 提示无法验证开发者，请在 Finder 中右键应用选择“打开”，或在“系统设置 > 隐私与安全性”中允许打开。
+推送 `macos-v*` 格式的 tag 可以自动触发 macOS 构建；Windows 的构建由 `windows-v*` tag 单独触发。当前构建未配置 Apple Developer 签名和公证；首次打开时如果 macOS 提示无法验证开发者，请在 Finder 中右键应用选择“打开”，或在“系统设置 > 隐私与安全性”中允许打开。
 
 ### 在 Mac 上本地构建
 
