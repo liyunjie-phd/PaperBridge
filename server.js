@@ -85,18 +85,6 @@ let runtime = {
 
 const configPath = () => path.join(runtime.dataRoot, "config.local.json");
 const stateRoot = () => path.join(runtime.dataRoot, "data");
-const webMode = () => process.env.PAPERBRIDGE_WEB_MODE === "1";
-
-function pathInside(root, candidate) {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function assertWebProjectRoot(projectRoot) {
-  if (webMode() && !pathInside(runtime.projectsRoot, projectRoot)) {
-    throw new Error("网页版只能打开当前用户项目目录中的论文。");
-  }
-}
 
 async function readJsonWithBackup(target, fallback, label) {
   try {
@@ -3466,16 +3454,6 @@ app.post("/api/undo/commit", route(async (_req, res) => {
 app.post("/api/setup", route(async (req, res) => {
   const incoming = req.body || {};
   const source = incoming.source || {};
-  if (webMode() && source.mode === "local") {
-    throw new Error("网页版不允许读取服务器本机路径，请使用 ZIP 上传、Git、Overleaf 或新建项目。");
-  }
-  if (webMode() && source.mode === "zip"
-    && !pathInside(process.env.PAPERBRIDGE_WEB_UPLOADS_ROOT || runtime.dataRoot, source.zipPath)) {
-    throw new Error("网页版 ZIP 文件路径无效，只能导入当前用户刚刚上传的文件。");
-  }
-  if (webMode() && incoming.storageRoot) {
-    throw new Error("网页版不允许更改服务器数据目录。");
-  }
   const preserveProviders = incoming.preserveProviders === true;
   const translation = preserveProviders
     ? config.translation
@@ -3724,7 +3702,6 @@ app.post("/api/project/open", route(async (req, res) => {
   const requestedRoot = String(req.body.projectRoot || "").trim();
   if (!requestedRoot) throw new Error("Project folder is required.");
   const projectRoot = path.resolve(requestedRoot);
-  assertWebProjectRoot(projectRoot);
   const mainTex = String(req.body.mainTex || "").trim() || await detectMainTex(projectRoot);
   await fs.access(path.join(projectRoot, mainTex));
   config = { ...config, projectRoot, mainTex };
@@ -3906,7 +3883,6 @@ app.delete("/api/git/credentials", route(async (req, res) => {
 app.get("/api/config", (_req, res) => res.json(safeConfig()));
 
 app.post("/api/storage/migrate", route(async (req, res) => {
-  if (webMode()) throw new Error("网页版不允许迁移服务器数据目录。");
   const migration = await migrateStorageRoot(req.body.storageRoot);
   res.json({ migration, project: await getProjectPayload() });
 }));
@@ -4200,9 +4176,7 @@ if (executedDirectly) {
       };
   startServer({
     storageRoot,
-    defaultStorageRoot: process.env.PAPERBRIDGE_WEB_MODE === "1"
-      ? ""
-      : path.join(process.env.USERPROFILE || APP_ROOT, "Documents", "PaperBridge Data"),
+    defaultStorageRoot: path.join(process.env.USERPROFILE || APP_ROOT, "Documents", "PaperBridge Data"),
     host: process.env.PAPERBRIDGE_HOST || "127.0.0.1",
     port: process.env.PAPERBRIDGE_PORT ? Number(process.env.PAPERBRIDGE_PORT) : undefined,
     dataRoot: process.env.PAPERBRIDGE_DATA_ROOT || (storageRoot ? path.join(storageRoot, "Settings") : APP_ROOT),

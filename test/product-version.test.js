@@ -16,7 +16,7 @@ test("product lines keep independent versions and release tag prefixes", async (
   assert.equal(versions.plugin.version, plugin.version);
   assert.equal(versions.windows.tagPrefix, "windows-v");
   assert.equal(versions.macos.tagPrefix, "macos-v");
-  assert.equal(versions.web.tagPrefix, "web-v");
+  assert.deepEqual(Object.keys(versions).sort(), ["macos", "plugin", "windows"]);
   assert.equal(versions.plugin.tagPrefix, "pblatex-v");
   assert.match(macConfig, /productVersions\.macos\.version/);
   assert.match(macWorkflow, /"macos-v\*"/);

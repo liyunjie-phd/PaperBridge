@@ -3,7 +3,6 @@ config.local.json
 storage-location.txt
 data/
 projects/
-web-data/
 release/
 source-backups/
 resources/bin/

@@ -11,12 +11,6 @@
     "artifactDirectory": "release/macos",
     "description": "macOS 桌面版"
   },
-  "web": {
-    "version": "0.1.0",
-    "tagPrefix": "web-v",
-    "artifactDirectory": null,
-    "description": "网页版测试服务"
-  },
   "plugin": {
     "version": "0.1.0",
     "tagPrefix": "pblatex-v",

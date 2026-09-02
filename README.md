@@ -19,15 +19,14 @@ PaperBridge 不代替作者决定论文内容。它用于保持中文修改、�
 
 Windows 桌面版是当前主线，只提供一个完整安装版。请在 [GitHub Releases](https://github.com/liyunjie-phd/PaperBridge/releases) 中选择名称以 `windows-v` 开头的 release 下载；Windows 的开发和发布优先级最高。
 
-### 四条产品线的版本
+### 三条产品线的版本
 
-网页版、PBLaTex 插件、Windows 桌面版和 macOS 桌面版各自维护版本号，不再共用一个 `v*` 版本。当前版本记录在 [product-versions.json](product-versions.json) 中：
+PBLaTex 插件、Windows 桌面版和 macOS 桌面版各自维护版本号，不再共用一个 `v*` 版本。当前版本记录在 [product-versions.json](product-versions.json) 中：
 
 | 产品线 | 当前版本 | 发布 tag 前缀 | 说明 |
 | --- | --- | --- | --- |
 | Windows | 0.5.0 | `windows-v` | 主线，优先更新和发布 |
 | macOS | 0.1.0 | `macos-v` | 独立的 DMG / ZIP 构建 |
-| Web | 0.1.0 | `web-v` | 网页网关测试版本 |
 | PBLaTex | 0.1.0 | `pblatex-v` | VS Code 增强插件 |
 
 例如，Windows 发布使用 `windows-v0.4.3`，macOS 发布使用 `macos-v0.1.1`；一个产品线的版本更新不会改变其他产品线的版本。构建前可运行 `npm run versions:check` 检查版本是否一致，使用 `npm run versions:set -- <product> <version>` 更新指定产品线。
@@ -41,12 +40,6 @@ Windows 桌面版是当前主线，只提供一个完整安装版。请在 [GitH
 当前版本没有商业代码签名证书。Windows 首次运行时可能显示“Windows 已保护你的电脑”。确认安装包来源后，可以选择 **更多信息 > 仍要运行**。
 
 可以从 Windows 的 **设置 > 应用 > 已安装的应用** 中卸载 PaperBridge。卸载时可以选择保留数据，也可以删除 PaperBridge 数据目录中的项目、工作稿、备份、设置和缓存。
-
-## 网页版小范围测试
-
-PaperBridge 另外提供一个实验性的网页版网关，适合约 10 名受邀请用户共同测试。所有人可以打开同一个公开链接，但首次注册需要邮箱、密码和管理员邀请码；注册后每个用户拥有独立账号、配置、项目目录、上传目录和 PaperBridge 后端进程。网页版不会允许用户读取服务器的任意本机路径。
-
-账号建立、启动方式、HTTPS 隧道和备份建议见 [网页版小范围测试说明](docs/WEB_TESTING_ZH.md)。网页版数据目录不要提交到 GitHub。
 
 ## 基础配置
 

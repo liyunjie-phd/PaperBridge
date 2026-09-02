@@ -1020,14 +1020,13 @@ async function deleteGitCredential(profile, button) {
 
 function openSetup(project, { switching = false } = {}) {
   state.setupMode = switching ? "switch" : "initial";
-  const webMode = Boolean(paperBridgeCookie("pb_csrf"));
   document.querySelector("#setupTitle").textContent = switching ? "添加或切换论文" : "开始使用 PaperBridge";
   document.querySelector("#setupSubtitle").textContent = switching
     ? "新建项目，或打开另一个 Overleaf、Git、ZIP、本地 LaTeX 项目"
     : "新建或选择论文项目；AI 和远端连接可以稍后配置";
   document.querySelector("#setupSubmitLabel").textContent = switching ? "打开论文" : "进入 PaperBridge";
   document.querySelector("#closeSetupButton").classList.toggle("hidden", !switching);
-  document.querySelector("#setupStorageSection").classList.toggle("hidden", switching || webMode);
+  document.querySelector("#setupStorageSection").classList.toggle("hidden", switching);
   document.querySelector("#setupAiSection").classList.toggle("hidden", switching);
   document.querySelector("#setupTestButton").classList.toggle("hidden", switching);
   document.querySelector("#setupSourceStep").textContent = switching ? "1" : "2";
@@ -1040,7 +1039,6 @@ function openSetup(project, { switching = false } = {}) {
   document.querySelector("#setupGitUrl").value = "";
   document.querySelector("#setupZipPath").value = "";
   document.querySelector("#setupLocalPath").value = "";
-  document.querySelector('input[name="setupSource"][value="local"]')?.closest("label")?.classList.toggle("hidden", webMode);
   document.querySelector("#setupLinkedGitUrl").value = "";
   document.querySelector("#setupConnectGit").checked = false;
   const tokenInput = document.querySelector("#setupOverleafToken");
@@ -1127,21 +1125,6 @@ function chooseMainTex(candidates, current) {
   });
 }
 
-async function uploadWebZip(file) {
-  const csrf = paperBridgeCookie("pb_csrf");
-  const response = await fetch(`/api/web/upload?name=${encodeURIComponent(file.name)}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": file.type || "application/zip",
-      ...(csrf ? { "X-PaperBridge-CSRF": csrf } : {})
-    },
-    body: file
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || `ZIP 上传失败：${response.status}`);
-  return payload.path;
-}
-
 function finishMainTexSelection() {
   const resolve = state.mainTexResolver;
   state.mainTexResolver = null;
@@ -1158,7 +1141,6 @@ async function submitSetup(event) {
   const button = document.querySelector("#setupSubmitButton");
   const mode = document.querySelector('input[name="setupSource"]:checked').value;
   const translation = setupProviderProfile();
-  const zipFile = document.querySelector("#setupZipFile")?.files?.[0] || null;
   const source = {
     mode,
     name: document.querySelector("#setupProjectName").value.trim(),
@@ -1188,10 +1170,6 @@ async function submitSetup(event) {
           ? "正在导入论文并连接 Git 仓库..."
           : "正在导入论文...");
   try {
-    if (mode === "zip" && zipFile && !source.zipPath) {
-      setSetupMessage("正在上传 ZIP 文件...");
-      source.zipPath = await uploadWebZip(zipFile);
-    }
     if (mode === "zip" && !source.zipPath) {
       throw new Error("请选择 ZIP 文件，或在桌面版中选择本地 ZIP 路径。");
     }
@@ -2043,22 +2021,14 @@ async function locateFastPreviewSelection(event) {
   }
 }
 
-function paperBridgeCookie(name) {
-  const prefix = `${encodeURIComponent(name)}=`;
-  const part = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith(prefix));
-  return part ? decodeURIComponent(part.slice(prefix.length)) : "";
-}
-
 async function api(url, options = {}) {
   const trackedWrite = UNDO_TRACKED_URLS.has(url) && !["GET", "HEAD"].includes(String(options.method || "GET").toUpperCase());
   if (trackedWrite) state.pendingWrites += 1;
   try {
-    const csrf = paperBridgeCookie("pb_csrf");
     const response = await fetch(url, {
       ...options,
       headers: {
         "Content-Type": "application/json",
-        ...(csrf ? { "X-PaperBridge-CSRF": csrf } : {}),
         ...(options.headers || {})
       }
     });
@@ -7692,20 +7662,6 @@ function applyPBLaTexEntryView() {
 
 async function initialize() {
   bindEvents();
-  const webLogoutButton = document.querySelector("#webLogoutButton");
-  if (webLogoutButton) {
-    try {
-      const response = await fetch("/api/web/session");
-      if (response.ok) {
-        const session = await response.json();
-        webLogoutButton.classList.remove("hidden");
-        webLogoutButton.title = `退出测试账号：${session.username || "当前用户"}`;
-        webLogoutButton.addEventListener("click", () => { window.location.href = "/auth/logout"; });
-      }
-    } catch {
-      // Desktop mode does not expose the web session endpoint.
-    }
-  }
   window.paperBridgeDesktop?.onCloseRequest?.(handleDesktopCloseRequest);
   renderFormatFiles();
   applyEditorPreferences(false);

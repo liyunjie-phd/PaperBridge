@@ -9,7 +9,7 @@ const WINDOWS_PACKAGE = path.join(ROOT, "package.json");
 const WINDOWS_LOCK = path.join(ROOT, "package-lock.json");
 const PLUGIN_PACKAGE = path.join(ROOT, "pblatex-vscode", "package.json");
 
-const PRODUCTS = ["windows", "macos", "web", "plugin"];
+const PRODUCTS = ["windows", "macos", "plugin"];
 const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 async function readJson(file) {
